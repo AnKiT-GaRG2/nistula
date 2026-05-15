@@ -1,5 +1,6 @@
 import { createApp } from './app.js';
 import { config } from './config.js';
+import { closePool } from './services/db.js';
 
 const app = createApp();
 
@@ -19,11 +20,12 @@ function shutdown(signal) {
     JSON.stringify({ type: 'shutdown', signal, timestamp: new Date().toISOString() }),
   );
 
-  server.close((err) => {
+  server.close(async (err) => {
     if (err) {
       console.error(JSON.stringify({ type: 'shutdown_error', message: err.message }));
       process.exit(1);
     }
+    await closePool();
     process.exit(0);
   });
 

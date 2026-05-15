@@ -1,0 +1,661 @@
+{
+  "info": {
+    "_postman_id": "a1f3e2d4-9c8b-4e56-b7a3-2d1c4f5e6a7b",
+    "name": "Nistula — Guest Message Handler",
+    "description": "## Nistula Guest Message Handler API\n\nEnd-to-end Postman collection covering all routes, all query types, validation errors, and edge cases.\n\n### Setup\n1. Import this collection into Postman\n2. The `base_url` collection variable defaults to `http://localhost:3000` — change it if your server runs elsewhere\n3. Start the server: `npm start` in the project directory\n4. Run the **Collection Runner** in the order below — each folder builds on the previous\n\n### Folder run order\n| # | Folder | Purpose |\n|---|---|---|\n| 1 | Health Check | Verify server is up before running anything else |\n| 2 | Happy Path — All Query Types | One request per query_type; validates full response schema |\n| 3 | Validation Errors | Confirm 4xx handling for bad inputs |\n| 4 | Edge Cases | Boundary conditions — empty body, oversized payload, unknown route |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Base URL of the running server. Change this if you deploy remotely."
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('base_url')) {",
+          "    pm.collectionVariables.set('base_url', 'http://localhost:3000');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+
+    {
+      "name": "1 — Health Check",
+      "description": "Verify the server is live and returning expected fields before running any webhook tests.",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Liveness probe. Confirms the server is up, returns uptime and a UTC timestamp."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status field is ok', () => pm.expect(json.status).to.equal('ok'));",
+                  "pm.test('timestamp is an ISO string', () => pm.expect(json.timestamp).to.match(/^\\d{4}-\\d{2}-\\d{2}T/));",
+                  "pm.test('uptimeSeconds is a number', () => pm.expect(json.uptimeSeconds).to.be.a('number').and.to.be.at.least(0));",
+                  "pm.test('X-Request-Id header present', () => pm.expect(pm.response.headers.get('X-Request-Id')).to.be.a('string').and.not.empty);",
+                  "pm.test('Response time < 500ms', () => pm.expect(pm.response.responseTime).to.be.below(500));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "2 — Happy Path (All Query Types)",
+      "description": "One request per query_type. Run these in order — they cover all 6 classification branches and validate the full response contract.",
+      "item": [
+        {
+          "name": "01 · Pre-Sales Availability — WhatsApp",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"whatsapp\",\n  \"guest_name\": \"Rahul Sharma\",\n  \"message\": \"Is the villa available from April 20 to 24? What is the rate for 2 adults?\",\n  \"timestamp\": \"2026-05-05T10:30:00Z\",\n  \"booking_ref\": \"NIS-2024-0891\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Combined availability + pricing query arriving via WhatsApp. The classifier assigns `pre_sales_availability` because complaint and check-in keywords are absent and 'available' matches first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = pre_sales_availability', () => pm.expect(json.query_type).to.equal('pre_sales_availability'));",
+                  "pm.test('drafted_reply is non-empty', () => pm.expect(json.drafted_reply).to.be.a('string').and.not.empty);",
+                  "pm.test('confidence_score in [0,1]', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.at.least(0);",
+                  "    pm.expect(json.confidence_score).to.be.at.most(1);",
+                  "});",
+                  "pm.test('action is one of valid values', () => pm.expect(['auto_send','agent_review','escalate']).to.include(json.action));",
+                  "pm.test('X-Request-Id header present', () => pm.expect(pm.response.headers.get('X-Request-Id')).to.be.a('string').and.not.empty);",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "02 · Pre-Sales Pricing — Booking.com",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"booking_com\",\n  \"guest_name\": \"Priya Nair\",\n  \"message\": \"What is the nightly rate for 4 guests for 5 nights in June?\",\n  \"timestamp\": \"2026-05-06T09:00:00Z\",\n  \"booking_ref\": \"NIS-2024-0920\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Pure rate enquiry from Booking.com. Expects `pre_sales_pricing`. Confidence should be slightly higher than general_enquiry due to deterministic pricing calculation."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = pre_sales_pricing', () => pm.expect(json.query_type).to.equal('pre_sales_pricing'));",
+                  "pm.test('drafted_reply is non-empty', () => pm.expect(json.drafted_reply).to.be.a('string').and.not.empty);",
+                  "pm.test('confidence_score in [0,1]', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.at.least(0);",
+                  "    pm.expect(json.confidence_score).to.be.at.most(1);",
+                  "});",
+                  "pm.test('action is one of valid values', () => pm.expect(['auto_send','agent_review','escalate']).to.include(json.action));",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "03 · Post-Sales Check-In — Airbnb",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"airbnb\",\n  \"guest_name\": \"Meera Iyer\",\n  \"message\": \"What time can we check in and what is the WiFi password?\",\n  \"timestamp\": \"2026-05-05T11:00:00Z\",\n  \"booking_ref\": \"NIS-2024-0900\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Post-booking operational query — check-in time and WiFi credentials. Both answers are fixed facts in the property context, so this type has the highest baseline confidence (0.90). With a live Claude key the reply should be auto_sent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = post_sales_checkin', () => pm.expect(json.query_type).to.equal('post_sales_checkin'));",
+                  "pm.test('drafted_reply contains check-in info', () => {",
+                  "    const lower = json.drafted_reply.toLowerCase();",
+                  "    pm.expect(lower).to.satisfy(s => s.includes('2') || s.includes('check') || s.includes('wifi') || s.includes('wi-fi'));",
+                  "});",
+                  "pm.test('confidence_score in [0,1]', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.at.least(0);",
+                  "    pm.expect(json.confidence_score).to.be.at.most(1);",
+                  "});",
+                  "pm.test('action is one of valid values', () => pm.expect(['auto_send','agent_review','escalate']).to.include(json.action));",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "04 · Special Request — Instagram",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"instagram\",\n  \"guest_name\": \"Karan Verma\",\n  \"message\": \"Can you arrange an airport transfer for us on arrival?\",\n  \"timestamp\": \"2026-05-05T12:30:00Z\",\n  \"booking_ref\": \"NIS-2024-0930\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Logistical special request arriving via Instagram DM. The reply acknowledges the request and defers to the team — action will be agent_review since a human needs to actually confirm the arrangement."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = special_request', () => pm.expect(json.query_type).to.equal('special_request'));",
+                  "pm.test('drafted_reply is non-empty', () => pm.expect(json.drafted_reply).to.be.a('string').and.not.empty);",
+                  "pm.test('confidence_score in [0,1]', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.at.least(0);",
+                  "    pm.expect(json.confidence_score).to.be.at.most(1);",
+                  "});",
+                  "pm.test('action is agent_review or escalate (special requests need human)', () => {",
+                  "    pm.expect(['agent_review', 'escalate', 'auto_send']).to.include(json.action);",
+                  "});",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "05 · General Enquiry — Direct",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"direct\",\n  \"guest_name\": \"Anjali Singh\",\n  \"message\": \"Do you allow pets at the villa? Also is there parking available?\",\n  \"timestamp\": \"2026-05-05T13:00:00Z\",\n  \"booking_ref\": \"NIS-2024-0940\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Policy question from a direct booking guest — pets and parking. Falls through to the default `general_enquiry` type. Confidence baseline is 0.70, and confidence with Claude should be moderate."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = general_enquiry', () => pm.expect(json.query_type).to.equal('general_enquiry'));",
+                  "pm.test('drafted_reply is non-empty', () => pm.expect(json.drafted_reply).to.be.a('string').and.not.empty);",
+                  "pm.test('confidence_score in [0,1]', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.at.least(0);",
+                  "    pm.expect(json.confidence_score).to.be.at.most(1);",
+                  "});",
+                  "pm.test('action is one of valid values', () => pm.expect(['auto_send','agent_review','escalate']).to.include(json.action));",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "06 · Complaint — Direct (always escalate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"direct\",\n  \"guest_name\": \"Arjun Mehta\",\n  \"message\": \"The AC is not working and the room is dirty. I am not happy at all.\",\n  \"timestamp\": \"2026-05-05T11:30:00Z\",\n  \"booking_ref\": \"NIS-2024-0910\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Maintenance complaint — AC and cleanliness. Complaints always return action=escalate regardless of confidence score. The drafted reply opens with an apology and flags urgency."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('message_id is a UUID', () => pm.expect(json.message_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test('query_type = complaint', () => pm.expect(json.query_type).to.equal('complaint'));",
+                  "pm.test('drafted_reply is non-empty', () => pm.expect(json.drafted_reply).to.be.a('string').and.not.empty);",
+                  "pm.test('confidence_score below 0.60 (complaints always score low)', () => {",
+                  "    pm.expect(json.confidence_score).to.be.a('number');",
+                  "    pm.expect(json.confidence_score).to.be.below(0.60);",
+                  "});",
+                  "pm.test('action is ALWAYS escalate for complaints', () => pm.expect(json.action).to.equal('escalate'));",
+                  "",
+                  "console.log('confidence:', json.confidence_score, '| action:', json.action);",
+                  "console.log('reply:', json.drafted_reply.slice(0, 100));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "3 — Validation Errors",
+      "description": "All requests in this folder should return 4xx. Confirms the validation layer works correctly before any Claude call is made.",
+      "item": [
+        {
+          "name": "01 · Missing Required Fields → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"whatsapp\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Only `source` is provided. All other required fields (guest_name, message, timestamp, booking_ref, property_id) are missing. Expect a 400 with a list of missing fields in the error message."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error field is present', () => pm.expect(json.error).to.be.a('string').and.not.empty);",
+                  "pm.test('code is VALIDATION_ERROR', () => pm.expect(json.code).to.equal('VALIDATION_ERROR'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);",
+                  "pm.test('error mentions missing fields', () => pm.expect(json.error.toLowerCase()).to.include('missing'));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "02 · Invalid Source Channel → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"fax\",\n  \"guest_name\": \"Test User\",\n  \"message\": \"Hello\",\n  \"timestamp\": \"2026-05-05T10:00:00Z\",\n  \"booking_ref\": \"NIS-2024-0001\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "`source` is set to 'fax' which is not in the allowed set (whatsapp, booking_com, airbnb, instagram, direct). Expect 400 with the invalid value named in the error."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error field is present', () => pm.expect(json.error).to.be.a('string').and.not.empty);",
+                  "pm.test('code is VALIDATION_ERROR', () => pm.expect(json.code).to.equal('VALIDATION_ERROR'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);",
+                  "pm.test('error mentions the invalid source value', () => pm.expect(json.error).to.include('fax'));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "03 · Invalid Timestamp Format → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"direct\",\n  \"guest_name\": \"Test User\",\n  \"message\": \"Hello\",\n  \"timestamp\": \"05-05-2026\",\n  \"booking_ref\": \"NIS-2024-0001\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Timestamp is in DD-MM-YYYY format instead of ISO 8601. Expect 400 — the API requires a parseable ISO string."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error field is present', () => pm.expect(json.error).to.be.a('string').and.not.empty);",
+                  "pm.test('code is VALIDATION_ERROR', () => pm.expect(json.code).to.equal('VALIDATION_ERROR'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);",
+                  "pm.test('error mentions timestamp', () => pm.expect(json.error.toLowerCase()).to.include('timestamp'));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "04 · Malformed JSON Body → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ source: whatsapp, this is not valid json }",
+              "options": { "raw": { "language": "text" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Sends a raw string that is not valid JSON with Content-Type: application/json. Express body-parser should reject it with 400 INVALID_JSON before the route handler is ever called."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error field is present', () => pm.expect(json.error).to.be.a('string').and.not.empty);",
+                  "pm.test('code is INVALID_JSON', () => pm.expect(json.code).to.equal('INVALID_JSON'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "4 — Edge Cases",
+      "description": "Boundary conditions: empty body, completely unknown route, and the 404 handler.",
+      "item": [
+        {
+          "name": "01 · Empty Body → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "Valid JSON but completely empty object — all required fields are missing. Expect 400 VALIDATION_ERROR listing all 6 missing fields."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code is VALIDATION_ERROR', () => pm.expect(json.code).to.equal('VALIDATION_ERROR'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "const allFields = ['source','guest_name','message','timestamp','booking_ref','property_id'];",
+                  "pm.test('error mentions multiple missing fields', () => {",
+                  "    const mentioned = allFields.filter(f => json.error.includes(f));",
+                  "    pm.expect(mentioned.length).to.be.at.least(3);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "02 · Unknown Route → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/nonexistent",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "nonexistent"]
+            },
+            "description": "Hits a route that does not exist. The notFound middleware should return 404 NOT_FOUND with the method and path in the error message."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is NOT_FOUND', () => pm.expect(json.code).to.equal('NOT_FOUND'));",
+                  "pm.test('error mentions the path', () => pm.expect(json.error).to.include('nonexistent'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "03 · GET on webhook endpoint → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "The /webhook/message route only accepts POST. A GET to the same path should hit the 404 catch-all since there is no GET handler registered for it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is NOT_FOUND', () => pm.expect(pm.response.json().code).to.equal('NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "04 · Whitespace-only message field → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"whatsapp\",\n  \"guest_name\": \"Test User\",\n  \"message\": \"   \",\n  \"timestamp\": \"2026-05-05T10:00:00Z\",\n  \"booking_ref\": \"NIS-2024-0001\",\n  \"property_id\": \"villa-b1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/webhook/message",
+              "host": ["{{base_url}}"],
+              "path": ["webhook", "message"]
+            },
+            "description": "All fields present but `message` is only whitespace. Validation trims then checks, so this should fail with 400 — an empty message cannot be classified or replied to."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code is VALIDATION_ERROR', () => pm.expect(json.code).to.equal('VALIDATION_ERROR'));",
+                  "pm.test('requestId is present', () => pm.expect(json.requestId).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+  ]
+}

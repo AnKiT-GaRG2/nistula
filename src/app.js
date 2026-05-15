@@ -10,6 +10,7 @@ import { securityHeaders } from './middleware/securityHeaders.js';
 import { createRateLimiter } from './middleware/rateLimiter.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { ValidationError } from './errors/AppError.js';
+import { persistMessage } from './services/messageStore.js';
 
 const ALLOWED_SOURCES = new Set(['whatsapp', 'booking_com', 'airbnb', 'instagram', 'direct']);
 
@@ -77,6 +78,19 @@ export function createApp() {
       });
 
       const action = deriveAction(confidenceScore, normalizedMessage.query_type);
+
+      persistMessage({
+        normalizedMessage,
+        draftedReply,
+        usedFallback,
+        confidenceScore,
+        action,
+        rawPayload: req.body,
+      }).catch((err) =>
+        console.error(
+          JSON.stringify({ type: 'db_persist_error', message: err.message, timestamp: new Date().toISOString() }),
+        ),
+      );
 
       return res.status(200).json({
         message_id: normalizedMessage.message_id,

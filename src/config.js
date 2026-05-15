@@ -17,4 +17,5 @@ export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
   rateLimitPerMinute: Number(process.env.RATE_LIMIT_PER_MINUTE || 60),
+  databaseUrl: process.env.DATABASE_URL || '',
 };
