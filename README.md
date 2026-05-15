@@ -56,8 +56,10 @@ src/
   utils/
     retry.js                  Exponential backoff with jitter
 scripts/
-  schema.sql                  Part 2 — PostgreSQL schema
+  seed.js                     Sample data seed script
   test-webhook.js             End-to-end test script (no external dependencies)
+schema.sql                    Part 2 — PostgreSQL schema (all tables, indexes, constraints)
+thinking.md                   Part 3 — written design answers
 ```
 
 ---
@@ -70,12 +72,18 @@ npm install
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env and add ANTHROPIC_API_KEY
+# Fill in DATABASE_URL (Neon connection string) and ANTHROPIC_API_KEY
 
-# 3. Start the server
+# 3. Apply the database schema (run once against your Neon / PostgreSQL instance)
+psql "$DATABASE_URL" -f schema.sql
+
+# 4. (Optional) Seed sample data
+node scripts/seed.js
+
+# 5. Start the server
 npm start
 
-# 4. Run tests
+# 6. Run end-to-end tests
 npm test
 ```
 
@@ -244,7 +252,7 @@ score = type_baseline + source_delta + quality_delta + length_delta
 
 ## Part 2 — PostgreSQL Schema
 
-See [`scripts/schema.sql`](scripts/schema.sql) for full `CREATE TABLE` statements, indexes, constraints, and design rationale.
+See [`schema.sql`](schema.sql) for full `CREATE TABLE` statements, indexes, constraints, and design rationale.
 
 ### Tables
 
