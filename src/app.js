@@ -1,60 +1,81 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
+import { config } from './config.js';
 import { classifyQuery } from './services/classifier.js';
 import { draftReply } from './services/claudeClient.js';
 import { calculateConfidence, deriveAction } from './services/confidence.js';
+import { requestId } from './middleware/requestId.js';
+import { requestLogger } from './middleware/requestLogger.js';
+import { securityHeaders } from './middleware/securityHeaders.js';
+import { createRateLimiter } from './middleware/rateLimiter.js';
+import { notFound, errorHandler } from './middleware/errorHandler.js';
+import { ValidationError } from './errors/AppError.js';
 
-const allowedSources = new Set(['whatsapp', 'booking_com', 'airbnb', 'instagram', 'direct']);
+const ALLOWED_SOURCES = new Set(['whatsapp', 'booking_com', 'airbnb', 'instagram', 'direct']);
 
-function validatePayload(payload) {
-  const requiredFields = ['source', 'guest_name', 'message', 'timestamp', 'booking_ref', 'property_id'];
-  const missing = requiredFields.filter((field) => !payload?.[field]);
+function validatePayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ValidationError('Request body must be a JSON object');
+  }
+
+  const required = ['source', 'guest_name', 'message', 'timestamp', 'booking_ref', 'property_id'];
+  const missing = required.filter((f) => !body[f] || typeof body[f] !== 'string' || !body[f].trim());
   if (missing.length) {
-    return `Missing required field(s): ${missing.join(', ')}`;
+    throw new ValidationError(`Missing or empty required field(s): ${missing.join(', ')}`);
   }
 
-  if (!allowedSources.has(payload.source)) {
-    return 'Invalid source';
+  if (!ALLOWED_SOURCES.has(body.source)) {
+    throw new ValidationError(
+      `Invalid source "${body.source}". Allowed values: ${[...ALLOWED_SOURCES].join(', ')}`,
+    );
   }
 
-  return null;
+  if (Number.isNaN(Date.parse(body.timestamp))) {
+    throw new ValidationError('Invalid timestamp — must be an ISO 8601 string');
+  }
 }
 
-function normalizeMessage(payload) {
+function normalizeMessage(body) {
   return {
     message_id: randomUUID(),
-    source: payload.source,
-    guest_name: payload.guest_name,
-    message_text: payload.message,
-    timestamp: payload.timestamp,
-    booking_ref: payload.booking_ref,
-    property_id: payload.property_id,
-    query_type: classifyQuery(payload.message),
+    source: body.source,
+    guest_name: body.guest_name.trim(),
+    message_text: body.message.trim(),
+    timestamp: body.timestamp,
+    booking_ref: body.booking_ref.trim(),
+    property_id: body.property_id.trim(),
+    query_type: classifyQuery(body.message),
   };
 }
 
 export function createApp() {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
 
-  app.post('/webhook/message', async (req, res) => {
+  // Trust the first proxy so req.ip reflects the real client IP behind a load balancer
+  app.set('trust proxy', 1);
+
+  // ── Middleware stack (order matters) ──────────────────────────────────────
+  app.use(securityHeaders);
+  app.use(requestId);
+  app.use(requestLogger);
+  app.use(express.json({ limit: '64kb' }));
+  app.use(createRateLimiter({ windowMs: 60_000, max: config.rateLimitPerMinute }));
+
+  // ── Routes ────────────────────────────────────────────────────────────────
+  app.post('/webhook/message', async (req, res, next) => {
     try {
-      const validationError = validatePayload(req.body);
-      if (validationError) {
-        return res.status(400).json({
-          error: validationError,
-        });
-      }
+      validatePayload(req.body);
 
       const normalizedMessage = normalizeMessage(req.body);
       const { draftedReply, usedFallback } = await draftReply(normalizedMessage);
+
       const confidenceScore = calculateConfidence({
         queryType: normalizedMessage.query_type,
         source: normalizedMessage.source,
         usedFallback,
-        complaint: normalizedMessage.query_type === 'complaint',
-        parsedReply: draftedReply,
+        replyLength: draftedReply.length,
       });
+
       const action = deriveAction(confidenceScore, normalizedMessage.query_type);
 
       return res.status(200).json({
@@ -65,16 +86,21 @@ export function createApp() {
         action,
       });
     } catch (error) {
-      return res.status(500).json({
-        error: 'Failed to process guest message',
-        details: error instanceof Error ? error.message : 'Unknown error',
-      });
+      next(error);
     }
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok' });
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+    });
   });
+
+  // ── Error handlers (must be last) ─────────────────────────────────────────
+  app.use(notFound);
+  app.use(errorHandler);
 
   return app;
 }
