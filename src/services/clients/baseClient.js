@@ -2,12 +2,40 @@ import { config } from '../../config.js';
 import { propertyContext } from '../../constants/propertyContext.js';
 import { withRetry } from '../../utils/retry.js';
 
+// ── Feature 2: Channel-aware tone ─────────────────────────────────────────────
+// These are explicit instructions Claude follows — emoji must appear inside the drafted_reply text itself.
+const CHANNEL_TONE = {
+  whatsapp:    'Casual and warm. End your reply with one emoji that matches the mood (e.g. ✨ 😊 🙂).',
+  airbnb:      'Warm and conversational. End your reply with one emoji that matches the mood (e.g. ✨ 😊).',
+  instagram:   'Relaxed, friendly, and brief. End your reply with one or two emoji that match the mood (e.g. ✨ 🙂 😊 🎉).',
+  booking_com: 'Warm but professionally structured. Do not include any emoji in your reply.',
+  direct:      'Professional and warm. Do not include any emoji in your reply.',
+};
+
+// ── Feature 4: Ban bot-speak ──────────────────────────────────────────────────
+const FORBIDDEN_PHRASES = `FORBIDDEN — never use these phrases, they make replies feel robotic:
+"please be assured", "kindly note", "as per your message", "as per your request",
+"I hope this helps", "feel free to reach out", "do not hesitate to contact us",
+"please find enclosed", "please note that", "we regret to inform you",
+"this is to inform you", "hope you understand", "we request you to",
+"thank you for reaching out", "we value your feedback"`;
+
+// ── Feature 5: Specificity rule ───────────────────────────────────────────────
+const SPECIFICITY_RULE = `SPECIFICITY: Reference one concrete detail from the guest's message beyond just their name.
+If they mention an occasion ("our anniversary"), a date, a number of guests, or a specific concern —
+weave it naturally into your reply so they know you actually read their message. Never give a reply
+that could have been sent to any guest.`;
+
 const COMMON_RULES = `STRICT RULES:
 - Address the guest by first name only
 - Keep every reply under 150 words
-- Do not mention the property by name unless the guest asked about it by name
+- If the guest asked more than one question, answer all of them — never silently skip one
+- Do not mention the property by name unless the guest explicitly asked about it by name
 - Never mention AI, confidence scores, or internal systems
-- Never give a generic reply that could apply to any guest message — be specific to what this person asked
+
+${SPECIFICITY_RULE}
+
+${FORBIDDEN_PHRASES}
 
 CONFIDENCE GUIDE:
 - 0.90–1.00: Factual query, precise answer exists in property context
@@ -16,10 +44,44 @@ CONFIDENCE GUIDE:
 - 0.40–0.59: Complaint — requires human empathy and judgement
 - Below 0.40: Ambiguous or urgent, requires information not in context`;
 
-export function buildSystemPrompt(typePrompt) {
-  return `You are the guest communications assistant for Nistula, a luxury villa rental company in Goa, India.
+function isUrgentTone(tone) {
+  return String(tone || '').startsWith('urgent');
+}
 
-You will receive a pre-classified guest message. Draft a reply that is warm, specific, and directly addresses what the guest actually asked.
+export function getResponseEmoji({ source, tone }) {
+  if (isUrgentTone(tone)) return '';
+
+  const channel = source === 'booking_com' || source === 'direct' ? 'none' : source;
+
+  if (channel === 'instagram') {
+    if (String(tone || '').startsWith('excited')) return ' ✨';
+    if (String(tone || '').startsWith('polite')) return ' 😊';
+    return ' 🙂';
+  }
+
+  if (channel === 'whatsapp' || channel === 'airbnb') {
+    if (String(tone || '').startsWith('excited')) return ' 😊';
+    if (String(tone || '').startsWith('polite')) return ' 🙂';
+    return ' ✨';
+  }
+
+  return '';
+}
+
+export function appendEmoji(reply, { source, tone }) {
+  const emoji = getResponseEmoji({ source, tone });
+  return emoji ? `${reply}${emoji}` : reply;
+}
+
+// ── Feature 1: Persona ────────────────────────────────────────────────────────
+export function buildSystemPrompt(typePrompt) {
+  return `You are Priya, guest relations specialist at Nistula, a boutique villa company in Goa, India.
+
+You know Villa B1 in Assagao personally — you have walked its rooms, swum in its pool, and you genuinely love the place.
+You speak the way a warm, knowledgeable friend would: direct, specific, never stiff or corporate.
+You are not a chatbot or a front desk — you are a person who cares whether this guest has a great stay.
+
+Draft a reply that directly addresses what the guest actually asked. Do not pad it.
 
 OUTPUT FORMAT — strict JSON only, no markdown, no text outside the JSON:
 {"drafted_reply": "...", "confidence": 0.00}
@@ -32,18 +94,71 @@ PROPERTY CONTEXT:
 ${propertyContext}`;
 }
 
+// For messages that span multiple query types, combine the individual TYPE_PROMPTs
+// into a single instruction block so Claude answers every topic in one reply.
+export function buildCombinedSystemPrompt(typePrompts) {
+  const numbered = typePrompts
+    .map((p, i) => `TOPIC ${i + 1}:\n${p}`)
+    .join('\n\n');
+
+  const combinedTypePrompt = `The guest has asked about MULTIPLE topics in one message. You must address every one of them.
+
+${numbered}
+
+Write a single, natural reply that covers all topics in flowing sentences. Do not use numbered lists or headings.`;
+
+  return buildSystemPrompt(combinedTypePrompt);
+}
+
+// ── Feature 3: Mirror guest energy ───────────────────────────────────────────
+export function detectGuestTone(messageText) {
+  const text = String(messageText || '');
+
+  if (/\b(urgent|emergency|immediately|right now|asap|unacceptable|terrible|horrible|disgusting|not happy|furious|3\s*am|no hot water|no power|no electricity|no signal)\b/i.test(text))
+    return 'urgent and distressed — respond with calm, direct empathy; drop all cheerfulness and exclamation marks';
+
+  if (/\b(excited|can'?t wait|looking forward|amazing|perfect|sounds great|wonderful|so happy|love it)\b/i.test(text))
+    return 'excited and enthusiastic — match their energy with genuine warmth';
+
+  if (/\b(please|could you|would it be possible|if that'?s okay|would appreciate|may i)\b/i.test(text))
+    return 'polite and measured — reply warmly but respect their considered tone';
+
+  return 'neutral — warm and natural';
+}
+
 export function buildUserContent(msg) {
-  return [
+  const tone = detectGuestTone(msg.message_text);
+  const channelTone = CHANNEL_TONE[msg.source] ?? CHANNEL_TONE.direct;
+
+  // Urgent guests override the channel emoji rule — no emoji when someone is distressed
+  const effectiveChannelTone = tone.startsWith('urgent')
+    ? channelTone.replace(/\. End your reply with[\s\S]*/i, '. Do not include any emoji in your reply.')
+    : channelTone;
+
+  const lines = [
     `Guest name: ${msg.guest_name}`,
     `Channel: ${msg.source}`,
+    `Channel tone guide: ${effectiveChannelTone}`,
     `Query type: ${msg.query_type}`,
     `Booking ref: ${msg.booking_ref}`,
     `Property: ${msg.property_id}`,
     `Sent at: ${msg.timestamp}`,
-    '',
-    'Guest message:',
-    msg.message_text,
-  ].join('\n');
+    `Guest tone: ${tone}`,
+  ];
+
+  // ── Feature 6: Conversation threading ────────────────────────────────────
+  if (msg.conversationHistory?.length) {
+    lines.push('', 'PRIOR CONVERSATION (most recent first):');
+    msg.conversationHistory.forEach(({ direction, text }, i) => {
+      const speaker = direction === 'inbound' ? 'Guest' : 'Nistula';
+      lines.push(`  [${i + 1}] ${speaker}: ${text}`);
+    });
+    lines.push('', 'Reply naturally as if continuing this conversation — no need to re-introduce yourself.');
+  }
+
+  lines.push('', 'Guest message:', msg.message_text);
+
+  return lines.join('\n');
 }
 
 export function extractText(data) {
@@ -71,22 +186,40 @@ export function parseClaudeResponse(text) {
     }
   }
 
-  const reply = typeof obj?.drafted_reply === 'string' ? obj.drafted_reply.trim() : '';
-  if (!reply) return null;
+  const replyCandidates = [
+    obj?.drafted_reply,
+    obj?.draftedReply,
+    obj?.reply,
+  ];
 
-  const rawConfidence = obj?.confidence;
-  const confidence =
-    typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1
-      ? rawConfidence
-      : null;
+  const reply = replyCandidates.find((value) => typeof value === 'string' && value.trim())?.trim();
 
-  return { reply, confidence };
+  if (reply) {
+    const rawConfidence = obj?.confidence;
+    const confidence =
+      typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1
+        ? rawConfidence
+        : null;
+
+    return { reply, confidence };
+  }
+
+  const cleaned = String(text)
+    .replace(/```json\s*/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  if (!cleaned) return null;
+
+  return { reply: cleaned, confidence: null };
 }
 
-export async function callClaude(systemPrompt, msg) {
+export async function callClaude(systemPrompt, msg, { maxTokens = 512 } = {}) {
   const response = await withRetry(
-    () =>
-      fetch('https://api.anthropic.com/v1/messages', {
+    () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      return fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -95,11 +228,13 @@ export async function callClaude(systemPrompt, msg) {
         },
         body: JSON.stringify({
           model: config.anthropicModel,
-          max_tokens: 512,
+          max_tokens: maxTokens,
           system: systemPrompt,
           messages: [{ role: 'user', content: buildUserContent(msg) }],
         }),
-      }),
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
+    },
     { maxAttempts: 3, baseDelayMs: 600 },
   );
 

@@ -6,6 +6,6 @@ Extra guest: INR 2,000 per night per person
 WiFi password: Nistula@2024
 Caretaker: Available 8am to 10pm
 Chef on call: Yes, pre-booking required
-Availability April 20-24: Available
+Availability: Only confirmed for April 20-24
 Current offer: None
 Cancellation: Free up to 7 days before check-in`;

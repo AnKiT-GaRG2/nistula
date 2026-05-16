@@ -1,6 +1,27 @@
 import { getPool } from './db.js';
 import { config } from '../config.js';
 
+export async function getConversationHistory(bookingRef, limit = 2) {
+  const pool = getPool();
+  if (!pool) return [];
+
+  try {
+    const result = await pool.query(
+      `SELECT m.direction, m.message_text AS text
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN guests g ON g.id = c.guest_id
+       WHERE g.metadata->>'booking_ref' = $1
+       ORDER BY m.sent_at DESC
+       LIMIT $2`,
+      [bookingRef, limit],
+    );
+    return result.rows;
+  } catch {
+    return [];
+  }
+}
+
 function mapActionToDispatchStatus(action) {
   if (action === 'auto_send') return 'auto_sent';
   if (action === 'escalate') return 'escalated';

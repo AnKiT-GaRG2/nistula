@@ -1,7 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
 import { config } from './config.js';
-import { classifyQuery } from './services/classifier.js';
+import { classifyAllQueryTypes } from './services/classifier.js';
 import { draftReply } from './services/claudeClient.js';
 import { calculateConfidence, deriveAction } from './services/confidence.js';
 import { requestId } from './middleware/requestId.js';
@@ -10,7 +10,7 @@ import { securityHeaders } from './middleware/securityHeaders.js';
 import { createRateLimiter } from './middleware/rateLimiter.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { ValidationError } from './errors/AppError.js';
-import { persistMessage } from './services/messageStore.js';
+import { persistMessage, getConversationHistory } from './services/messageStore.js';
 
 const ALLOWED_SOURCES = new Set(['whatsapp', 'booking_com', 'airbnb', 'instagram', 'direct']);
 
@@ -37,6 +37,7 @@ function validatePayload(body) {
 }
 
 function normalizeMessage(body) {
+  const query_types = classifyAllQueryTypes(body.message);
   return {
     message_id: randomUUID(),
     source: body.source,
@@ -45,7 +46,8 @@ function normalizeMessage(body) {
     timestamp: body.timestamp,
     booking_ref: body.booking_ref.trim(),
     property_id: body.property_id.trim(),
-    query_type: classifyQuery(body.message),
+    query_type: query_types[0],   // primary type — drives confidence baseline and response field
+    query_types,                  // all matched types — used for multi-topic Claude calls
   };
 }
 
@@ -68,10 +70,17 @@ export function createApp() {
       validatePayload(req.body);
 
       const normalizedMessage = normalizeMessage(req.body);
-      const { draftedReply, usedFallback, claudeConfidence } = await draftReply(normalizedMessage);
+
+      // Attach prior conversation so Claude can continue naturally (feature 6)
+      normalizedMessage.conversationHistory = await getConversationHistory(
+        normalizedMessage.booking_ref,
+      ).catch(() => []);
+
+      const { draftedReply, usedFallback, replySource, claudeConfidence } = await draftReply(normalizedMessage);
 
       const confidenceScore = calculateConfidence({
         queryType: normalizedMessage.query_type,
+        queryTypes: normalizedMessage.query_types,
         source: normalizedMessage.source,
         usedFallback,
         replyLength: draftedReply.length,
@@ -99,6 +108,7 @@ export function createApp() {
         drafted_reply: draftedReply,
         confidence_score: confidenceScore,
         action,
+        reply_source: replySource,
       });
     } catch (error) {
       next(error);

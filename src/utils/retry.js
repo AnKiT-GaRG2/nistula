@@ -17,7 +17,9 @@ export async function withRetry(fn, options = {}) {
     } catch (error) {
       lastError = error;
 
-      const isRetryable = retryableStatuses.some((status) =>
+      // Also retry on transient network errors (DNS failure, TCP reset, etc.)
+      const isNetworkError = error instanceof TypeError && String(error.message).includes('fetch failed');
+      const isRetryable = isNetworkError || retryableStatuses.some((status) =>
         String(error?.message ?? '').includes(String(status)),
       );
 

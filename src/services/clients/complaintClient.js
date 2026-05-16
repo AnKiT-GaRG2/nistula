@@ -1,6 +1,6 @@
 import { buildSystemPrompt, callClaude } from './baseClient.js';
 
-const TYPE_PROMPT = `RESPONSE GUIDE BY QUERY TYPE - complaint:
+export const TYPE_PROMPT = `RESPONSE GUIDE BY QUERY TYPE - complaint:
 - Name the specific issue the guest raised — do not be vague
 - Open with genuine empathy tied to their exact situation
 - Assure the team is on it immediately

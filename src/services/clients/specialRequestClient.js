@@ -1,6 +1,6 @@
 import { buildSystemPrompt, callClaude } from './baseClient.js';
 
-const TYPE_PROMPT = `RESPONSE GUIDE BY QUERY TYPE - special_request:
+export const TYPE_PROMPT = `RESPONSE GUIDE BY QUERY TYPE - special_request:
 - Acknowledge the exact thing the guest asked for (airport transfer, chef, early check-in, decoration, etc.)
 - Ask for the specific details needed to action it:
   - Airport transfer → arrival date, time, flight number, number of passengers

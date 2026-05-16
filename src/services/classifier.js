@@ -1,5 +1,10 @@
 /**
- * Priority-ordered classification rules. First full match wins.
+ * Priority-ordered classification rules.
+ *
+ * classifyQuery        — returns the single highest-priority match (backward compat).
+ * classifyAllQueryTypes — returns ALL matched types in priority order, enabling
+ *                         multi-topic handling when a guest asks two different things
+ *                         in one message (e.g. "Is it available April 20? Also, WiFi?").
  *
  * Order rationale:
  *  1. complaint      — an angry message mentioning dates/pricing still needs escalation
@@ -75,4 +80,14 @@ export function classifyQuery(messageText = '') {
     }
   }
   return 'general_enquiry';
+}
+
+// Returns every matched type in priority order (complaint first, availability last).
+// Deduplication is implicit since each rule maps to a unique type.
+export function classifyAllQueryTypes(messageText = '') {
+  const text = String(messageText || '').trim();
+  const matched = QUERY_RULES
+    .filter((rule) => rule.patterns.some((pattern) => pattern.test(text)))
+    .map((rule) => rule.type);
+  return matched.length ? matched : ['general_enquiry'];
 }

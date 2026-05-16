@@ -37,8 +37,11 @@ const SOURCE_DELTA = {
   instagram: 0.00,
 };
 
-export function calculateConfidence({ queryType, source, usedFallback, replyLength = 0, claudeConfidence = null }) {
-  const base = TYPE_BASELINE[queryType] ?? 0.70;
+export function calculateConfidence({ queryType, queryTypes, source, usedFallback, replyLength = 0, claudeConfidence = null }) {
+  // Multi-type messages are harder — use the lowest baseline across all matched types
+  const base = queryTypes?.length > 1
+    ? Math.min(...queryTypes.map((t) => TYPE_BASELINE[t] ?? 0.70))
+    : (TYPE_BASELINE[queryType] ?? 0.70);
   const sourceDelta = SOURCE_DELTA[source] ?? 0.00;
   const qualityDelta = usedFallback ? -0.10 : 0.05;
   const lengthDelta = replyLength < 40 ? -0.05 : replyLength > 100 ? 0.03 : 0.01;

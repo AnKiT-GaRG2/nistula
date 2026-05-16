@@ -4,10 +4,11 @@ import { closePool } from './services/db.js';
 
 const app = createApp();
 const requestedPort = config.port;
+const maxPortRetries = 20;
 
 let server;
 
-function startServer(port) {
+function startServer(port, remainingRetries = maxPortRetries) {
   const instance = app.listen(port, () => {
     console.log(
       JSON.stringify({
@@ -21,20 +22,21 @@ function startServer(port) {
   });
 
   instance.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && !process.env.PORT && port === requestedPort) {
+    if (err.code === 'EADDRINUSE' && remainingRetries > 0) {
       const nextPort = port + 1;
 
       console.warn(
         JSON.stringify({
           type: 'port_in_use',
           requestedPort,
+          currentPort: port,
           fallbackPort: nextPort,
           message: `Port ${port} is busy; retrying on ${nextPort}`,
           timestamp: new Date().toISOString(),
         }),
       );
 
-      startServer(nextPort);
+      startServer(nextPort, remainingRetries - 1);
       return;
     }
 
@@ -43,6 +45,7 @@ function startServer(port) {
         type: 'server_error',
         code: err.code,
         message: err.message,
+        requestedPort,
         timestamp: new Date().toISOString(),
       }),
     );
