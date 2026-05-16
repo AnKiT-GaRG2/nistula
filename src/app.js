@@ -62,7 +62,12 @@ export function createApp() {
   app.use(requestId);
   app.use(requestLogger);
   app.use(express.json({ limit: '64kb' }));
-  app.use(createRateLimiter({ windowMs: 60_000, max: config.rateLimitPerMinute }));
+  app.use(
+    createRateLimiter({
+      maxRequestsPerSecond: config.rateLimitPerSecond,
+      cooldownSeconds: config.rateLimitCooldownSeconds,
+    }),
+  );
 
   // ── Routes ────────────────────────────────────────────────────────────────
   app.post('/webhook/message', async (req, res, next) => {

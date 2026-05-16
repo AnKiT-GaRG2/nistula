@@ -370,10 +370,11 @@ All AI calls include a 15-second `AbortController` timeout. Network errors (`fet
 - **Retry with exponential backoff + jitter** — retries on transient HTTP errors (429, 500, 502, 503, 529) and network-level failures. Jitter (±10%) prevents thundering-herd reconnects.
 - **15-second per-request timeout** — every AI call is wrapped in `AbortController`. Slow responses fail fast and fall through to the next provider.
 - **Graceful shutdown** — `SIGTERM`/`SIGINT` drains active connections (10-second hard timeout, then force exit).
-- **Rate limiting** — 60 requests/minute per IP, sliding window, in-memory. Swap the `Map` in `rateLimiter.js` for Redis when running multiple processes.
+- **Rate limiting** — circuit-breaker-backed per-IP throttling at 5 requests/second. If a client exceeds the limit, the circuit opens and blocks that IP for 10 seconds before cooling off and allowing traffic again. The limiter is still in-memory; swap it for a shared store if you run multiple processes.
 - **Structured JSON logging** — every request, error, and AI provider attempt is emitted as a JSON object with `requestId`, `durationMs`, `reply_source`, and `timestamp`. Ready for any log aggregator.
 - **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy` on every response; `X-Powered-By` suppressed.
 - **Non-blocking DB writes** — message persistence is fire-and-forget with `.catch()` error logging. A DB failure never delays or breaks the API response.
+- **Token optimisation via caching** — we can reduce AI token usage by caching replies for repeated intent patterns. For example, a `pre_sales_pricing` message containing the same key words like “rate”, “night”, and the same property context can reuse a previously generated response instead of re-sending the full prompt to the model. A cache key can be built from `query_type + normalized keywords + property_id`, so near-identical questions hit the cache while unrelated messages still go through the model.
 
 ---
 

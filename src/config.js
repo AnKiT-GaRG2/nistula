@@ -22,5 +22,7 @@ export const config = {
   groqApiKey,
   groqModel: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   rateLimitPerMinute: Number(process.env.RATE_LIMIT_PER_MINUTE || 60),
+  rateLimitPerSecond: Number(process.env.RATE_LIMIT_PER_SECOND || 5),
+  rateLimitCooldownSeconds: Number(process.env.RATE_LIMIT_COOLDOWN_SECONDS || 10),
   databaseUrl: process.env.DATABASE_URL || '',
 };
