@@ -1,13 +1,16 @@
 import { buildSystemPrompt, callClaude } from './baseClient.js';
 
-const SYSTEM_PROMPT = buildSystemPrompt(`QUERY TYPE: complaint
-
-RESPONSE GUIDE:
+const TYPE_PROMPT = `RESPONSE GUIDE BY QUERY TYPE - complaint:
 - Name the specific issue the guest raised — do not be vague
 - Open with genuine empathy tied to their exact situation
 - Assure the team is on it immediately
-- Never minimise, deflect, or promise a refund`);
+- Never minimise, deflect, or promise a refund`;
 
 export async function draftComplaintReply(msg) {
-  return callClaude(SYSTEM_PROMPT, msg);
+  try {
+    const systemPrompt = buildSystemPrompt(TYPE_PROMPT);
+    return await callClaude(systemPrompt, msg);
+  } catch (error) {
+    throw new Error(`Complaint client error: ${error.message}`);
+  }
 }

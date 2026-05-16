@@ -7,4 +7,5 @@ WiFi password: Nistula@2024
 Caretaker: Available 8am to 10pm
 Chef on call: Yes, pre-booking required
 Availability April 20-24: Available
+Current offer: None
 Cancellation: Free up to 7 days before check-in`;
