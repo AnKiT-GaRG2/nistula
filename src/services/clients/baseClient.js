@@ -3,11 +3,12 @@ import { propertyContext } from '../../constants/propertyContext.js';
 import { withRetry } from '../../utils/retry.js';
 
 // ── Feature 2: Channel-aware tone ─────────────────────────────────────────────
-// These are explicit instructions Claude follows — emoji must appear inside the drafted_reply text itself.
+// The AI picks the emoji itself based on context — no hardcoded suggestions.
+// Emoji must appear inside the drafted_reply text; it is parsed out with the reply.
 const CHANNEL_TONE = {
-  whatsapp:    'Casual and warm. End your reply with one emoji that matches the mood (e.g. ✨ 😊 🙂).',
-  airbnb:      'Warm and conversational. End your reply with one emoji that matches the mood (e.g. ✨ 😊).',
-  instagram:   'Relaxed, friendly, and brief. End your reply with one or two emoji that match the mood (e.g. ✨ 🙂 😊 🎉).',
+  whatsapp:    'Casual and warm. End your reply with a single emoji that genuinely fits the specific context and emotion of this message.',
+  airbnb:      'Warm and conversational. End your reply with a single emoji that fits the tone of this specific message.',
+  instagram:   'Relaxed, friendly, and brief. End your reply with one or two emoji that naturally fit the mood of this specific message.',
   booking_com: 'Warm but professionally structured. Do not include any emoji in your reply.',
   direct:      'Professional and warm. Do not include any emoji in your reply.',
 };
@@ -46,31 +47,6 @@ CONFIDENCE GUIDE:
 
 function isUrgentTone(tone) {
   return String(tone || '').startsWith('urgent');
-}
-
-export function getResponseEmoji({ source, tone }) {
-  if (isUrgentTone(tone)) return '';
-
-  const channel = source === 'booking_com' || source === 'direct' ? 'none' : source;
-
-  if (channel === 'instagram') {
-    if (String(tone || '').startsWith('excited')) return ' ✨';
-    if (String(tone || '').startsWith('polite')) return ' 😊';
-    return ' 🙂';
-  }
-
-  if (channel === 'whatsapp' || channel === 'airbnb') {
-    if (String(tone || '').startsWith('excited')) return ' 😊';
-    if (String(tone || '').startsWith('polite')) return ' 🙂';
-    return ' ✨';
-  }
-
-  return '';
-}
-
-export function appendEmoji(reply, { source, tone }) {
-  const emoji = getResponseEmoji({ source, tone });
-  return emoji ? `${reply}${emoji}` : reply;
 }
 
 // ── Feature 1: Persona ────────────────────────────────────────────────────────

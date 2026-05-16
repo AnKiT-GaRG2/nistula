@@ -76,30 +76,25 @@ Booking.com and direct bookings attract guests who expect a more formal, hotel-l
 
 When an urgent tone is detected, the channel emoji instruction is **overridden** regardless of channel. Even on WhatsApp (where emoji are normally required), the instruction is rewritten to: *"Do not include any emoji in your reply."* A distressed guest on WhatsApp still gets no emoji.
 
-#### Emoji selection for fallback replies
+#### Emoji selection — AI-driven, not hardcoded
 
-When the AI is unavailable and a template reply is used, `appendEmoji()` adds an emoji at the code level using the same tone × channel matrix:
+Rather than limiting the AI to a fixed set of emoji, the channel tone instruction simply tells the AI to **choose any emoji that genuinely fits the specific context and emotion of the message**:
 
-| Channel | Excited tone | Polite tone | Neutral tone | Urgent tone |
-|---|---|---|---|---|
-| `instagram` | ✨ | 😊 | 🙂 | — (none) |
-| `whatsapp` | 😊 | 🙂 | ✨ | — (none) |
-| `airbnb` | 😊 | 🙂 | ✨ | — (none) |
-| `booking_com` | — | — | — | — |
-| `direct` | — | — | — | — |
+- WhatsApp/Airbnb: *"End your reply with a single emoji that genuinely fits the specific context and emotion of this message."*
+- Instagram: *"End your reply with one or two emoji that naturally fit the mood of this specific message."*
+- Booking.com / direct: *"Do not include any emoji in your reply."*
 
-The emoji choices are intentional:
-- **✨** (sparkle) — default warm/positive. Works across contexts without implying too much.
-- **😊** (warm smile) — used when the guest is excited; matches their energy without being over-the-top.
-- **🙂** (gentle smile) — used for polite/measured guests; respects their more restrained register.
+The AI picks freely based on what was actually said. A guest excited about a birthday celebration might get 🎂. A pool question on a hot day might get 🌊. A pricing confirmation might get 👌. This is more human than any hardcoded matrix — the AI has read the full message and knows what fits, whereas a code-level lookup only knows the tone category.
 
-Instagram gets sparkle as default (more playful channel norm); WhatsApp/Airbnb get sparkle too, but the mapping for excited and polite is swapped slightly — WhatsApp tone tends to be warmer than Instagram's relaxed style.
+The emoji is embedded inside the `drafted_reply` string in the AI's JSON response and is parsed out as part of the reply text — no separate post-processing needed.
+
+**Fallback replies (AI unavailable)** — when all three AI providers fail, no emoji is added to the generic text template. A template reply was written without reading the guest's actual message, so no code-level logic can pick an emoji that genuinely fits. A template without emoji is more honest than one with a randomly chosen character.
 
 #### Why this matters
 
-Emoji in guest messaging are not decoration — they are a signal of channel fluency. A hospitality brand that sends emoji-free replies on WhatsApp sounds like a corporate help desk. A brand that sends 😊 on Booking.com sounds amateurish. A brand that replies to a complaint at 3 AM with ✨ sounds like it did not read the message.
+Emoji in guest messaging are a signal of channel fluency. A WhatsApp reply with no emoji sounds like a corporate help desk. A Booking.com reply with emoji sounds amateurish. A reply to a 3 AM complaint with a cheerful emoji sounds like the sender did not read the message.
 
-Getting this right — right channel, right tone, right emoji or no emoji — is what makes the reply feel like it came from a person who understood the guest, not a bot that filled in a template. That's the purpose of the entire tone and emoji system: keep the reply within the 150-word limit while still communicating warmth, competence, or urgency through something as small as one character at the end of a sentence.
+Letting the AI choose the emoji from the full context of the conversation — rather than mapping tone categories to a fixed list of three characters — is what makes a reply feel native to the specific moment, not just the channel category.
 
 ### Multi-provider AI strategy
 
