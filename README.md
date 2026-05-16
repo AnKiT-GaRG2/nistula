@@ -216,62 +216,76 @@ The confidence score represents **how certain we are that the drafted reply is a
 ### Formula
 
 ```
-heuristic = type_baseline + source_delta + quality_delta + length_delta
+heuristic = type_baseline + source_delta + provider_delta + length_delta + context_bonus
 
-final_score = claudeConfidence × 0.65 + heuristic × 0.35   (when AI returns its own score)
-            = heuristic                                       (when fallback is used)
+final_score = aiConfidence × 0.65 + heuristic × 0.35   (when AI returns its own score)
+            = heuristic                                   (when fallback is used)
 ```
 
-When the AI returns a self-reported confidence value (embedded in its JSON output), it carries **65% weight** — the model has read the actual message and knows how well its reply covers the question. The heuristic captures structural signals the model cannot see (channel trust, fallback penalty, reply completeness).
+When the AI returns a self-reported confidence value it carries **65% weight** — the model has read the actual message and knows how well its reply covers the question. The heuristic (35%) captures structural signals the model cannot see: channel trust, provider quality, reply completeness, conversation context.
 
 ### Type baseline
 
-Factual queries with deterministic answers score highest. Complaint is hardcoded low because a human should always review it, regardless of how well-written the AI reply is.
-
 | Query type | Baseline | Rationale |
 |---|---|---|
-| `post_sales_checkin` | 0.90 | Fixed facts: check-in time, WiFi password — verifiable |
-| `pre_sales_availability` | 0.87 | Direct answer from property availability window |
-| `pre_sales_pricing` | 0.85 | Deterministic arithmetic, clear formula |
-| `special_request` | 0.72 | Reply gathers info, but a human must actually arrange it |
+| `post_sales_checkin` | 0.90 | Fixed facts — check-in time, WiFi password |
+| `pre_sales_availability` | 0.87 | Direct lookup from property availability data |
+| `pre_sales_pricing` | 0.85 | Deterministic arithmetic — clear formula |
+| `special_request` | 0.72 | Reply gathers info; human must actually arrange it |
 | `general_enquiry` | 0.70 | Wide range of possible sub-questions |
-| `complaint` | 0.40 | Requires human empathy and follow-up — never auto-send |
+| `complaint` | 0.40 | Requires human empathy and follow-up |
+
+Multi-type messages use the **lowest** baseline across all matched types minus a **−0.03 complexity penalty**.
 
 ### Source delta
 
 | Source | Delta | Rationale |
 |---|---|---|
-| `direct` | +0.03 | Direct booking — richest context |
-| `booking_com` | +0.02 | Reservation confirmed, structured data |
-| `airbnb` | +0.02 | Reservation confirmed |
-| `whatsapp` | +0.01 | Common channel, often informal |
-| `instagram` | 0.00 | Can be anyone; least context |
+| `direct` | +0.03 | Richest context — direct booking relationship |
+| `booking_com` | +0.02 | Confirmed reservation, structured platform data |
+| `airbnb` | +0.02 | Confirmed reservation |
+| `whatsapp` | +0.01 | Common, often informal |
+| `instagram` | 0.00 | Can be anyone — least context |
 
-### Quality delta
+### Provider delta
 
-| Origin | Delta |
+Reflects which AI provider drafted the reply — not just AI vs template.
+
+| Provider | Delta | Rationale |
+|---|---|---|
+| `claude` | +0.05 | Primary; richest instruction-following and persona adherence |
+| `groq` | +0.03 | Strong reasoning; slightly less nuanced |
+| `gemini` | +0.02 | Capable; different training distribution adds small uncertainty |
+| `fallback` | −0.15 | Generic template — ignores the actual message entirely |
+
+### Length delta (query-type aware)
+
+Thresholds scale with what each query type actually requires — pricing must show arithmetic (100+ chars minimum), check-in can be brief (50 chars).
+
+| Condition | Delta |
 |---|---|
-| AI reply (Claude/Groq/Gemini) | +0.05 |
-| Text fallback template | −0.10 |
+| < 30 chars | −0.08 (almost certainly malformed) |
+| < type minimum (50–100 chars) | −0.04 |
+| > 150 chars | +0.03 |
+| Otherwise | +0.01 |
 
-### Length delta
+### Conversation history bonus
 
-| Reply length | Delta |
+| Condition | Delta |
 |---|---|
-| > 100 characters | +0.03 |
-| 40–100 characters | +0.01 |
-| < 40 characters | −0.05 (likely incomplete) |
+| Prior messages injected into prompt | +0.02 |
+| No history | 0.00 |
 
 ### Action routing
 
-| Score | Action | Meaning |
+| Condition | Action | Reasoning |
 |---|---|---|
-| > 0.85 | `auto_send` | Send immediately without review |
-| 0.60–0.85 | `agent_review` | Queue for human approval |
-| < 0.60 | `escalate` | Route to senior agent |
-| `complaint` (any score) | `escalate` | Hardcoded — always bypasses auto-send |
-
-Multi-type messages use the **lowest** baseline across all matched types (most conservative wins).
+| `complaint` in any matched type | `escalate` | Always — regardless of score or provider |
+| `special_request` in any matched type | `agent_review` / `escalate` | Human must physically arrange it |
+| `replySource === 'fallback'` | `agent_review` / `escalate` | Template has no context — cap at review |
+| Score > 0.85 | `auto_send` | High confidence, factual, AI-drafted |
+| Score 0.60–0.85 | `agent_review` | Plausible — quick human scan before sending |
+| Score < 0.60 | `escalate` | Low confidence or ambiguous |
 
 ---
 

@@ -79,15 +79,19 @@ export function createApp() {
       const { draftedReply, usedFallback, replySource, claudeConfidence } = await draftReply(normalizedMessage);
 
       const confidenceScore = calculateConfidence({
-        queryType: normalizedMessage.query_type,
-        queryTypes: normalizedMessage.query_types,
-        source: normalizedMessage.source,
-        usedFallback,
-        replyLength: draftedReply.length,
+        queryType:              normalizedMessage.query_type,
+        queryTypes:             normalizedMessage.query_types,
+        source:                 normalizedMessage.source,
+        replySource,
+        replyLength:            draftedReply.length,
         claudeConfidence,
+        hasConversationHistory: normalizedMessage.conversationHistory?.length > 0,
       });
 
-      const action = deriveAction(confidenceScore, normalizedMessage.query_type);
+      const action = deriveAction(confidenceScore, normalizedMessage.query_type, {
+        queryTypes:  normalizedMessage.query_types,
+        replySource,
+      });
 
       persistMessage({
         normalizedMessage,
