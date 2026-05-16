@@ -68,13 +68,14 @@ export function createApp() {
       validatePayload(req.body);
 
       const normalizedMessage = normalizeMessage(req.body);
-      const { draftedReply, usedFallback } = await draftReply(normalizedMessage);
+      const { draftedReply, usedFallback, claudeConfidence } = await draftReply(normalizedMessage);
 
       const confidenceScore = calculateConfidence({
         queryType: normalizedMessage.query_type,
         source: normalizedMessage.source,
         usedFallback,
         replyLength: draftedReply.length,
+        claudeConfidence,
       });
 
       const action = deriveAction(confidenceScore, normalizedMessage.query_type);

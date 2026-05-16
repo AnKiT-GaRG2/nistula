@@ -15,5 +15,6 @@ const replyTemplates = {
 
 export function generateFallbackReply(normalizedMessage) {
   const template = replyTemplates[normalizedMessage.query_type] || replyTemplates.general_enquiry;
-  return template({ guestName: normalizedMessage.guest_name || 'there' });
+  const firstName = (normalizedMessage.guest_name || 'there').split(' ')[0];
+  return template({ guestName: firstName });
 }
