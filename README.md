@@ -1,31 +1,41 @@
 # Nistula Guest Message Handler
 
-A production-grade Node.js/Express backend that receives inbound guest messages from multiple channels, normalises them into a unified schema, drafts AI-powered replies via the Claude API, and returns a confidence-scored, action-routed response.
+A production-grade Node.js/Express webhook that receives inbound guest messages from multiple booking channels, classifies intent, drafts AI-powered replies through a three-tier provider chain, and returns a confidence-scored, action-routed response.
 
 ---
 
-## Architecture overview
+## Architecture
 
 ```
 Inbound webhook
       │
       ▼
-[Security headers] → [Request ID] → [Structured logger] → [Body parser] → [Rate limiter]
+[Security headers] → [Request ID] → [Structured JSON logger] → [Body parser] → [Rate limiter]
       │
       ▼
 POST /webhook/message
       │
-  validatePayload()        — strict schema + source allowlist + timestamp check
+  validatePayload()         — strict field validation, source allowlist, ISO 8601 timestamp check
       │
-  normalizeMessage()       — unified schema + UUID generation
+  normalizeMessage()        — unified schema, UUID generation, all matched query types
       │
-  classifyQuery()          — priority-ordered regex classifier → query_type
+  classifyAllQueryTypes()   — priority-ordered regex classifier → query_type + query_types[]
       │
-  draftReply()             — Claude API (3 retries, exponential backoff) or fallback
+  getConversationHistory()  — last 2 messages from DB injected as context (feature: threading)
       │
-  calculateConfidence()    — multi-dimensional score [0.00–1.00]
+  draftReply()              — multi-provider AI chain with per-type token budgets
+      │     ┌─────────────────────────────────────────────────────────┐
+      │     │  Tier 1: Claude (Anthropic) — primary, highest quality  │
+      │     │  Tier 2: Groq (Llama 70B)  — fast, cost-effective       │
+      │     │  Tier 3: Gemini Flash      — tertiary fallback           │
+      │     │  Tier 4: Text templates    — always succeeds             │
+      │     └─────────────────────────────────────────────────────────┘
       │
-  deriveAction()           — auto_send | agent_review | escalate
+  calculateConfidence()     — multi-dimensional score [0.00–1.00]
+      │
+  deriveAction()            — auto_send | agent_review | escalate
+      │
+  persistMessage()          — async DB write (non-blocking, won't fail the response)
       │
       ▼
 JSON response + X-Request-Id header
@@ -35,31 +45,44 @@ JSON response + X-Request-Id header
 
 ```
 src/
-  app.js                     Express app factory (routes + middleware wiring)
-  config.js                  Environment config with startup warning
-  server.js                  Process entry point + graceful shutdown
+  app.js                          Express app factory (routes + middleware)
+  config.js                       Environment config, validated at startup
+  server.js                       Process entry point + graceful shutdown
   constants/
-    propertyContext.js        Static property data injected into the Claude prompt
+    propertyContext.js            Static villa data injected into every AI prompt
   errors/
-    AppError.js               Custom error classes (AppError, ValidationError)
+    AppError.js                   Custom error classes (AppError, ValidationError)
   middleware/
-    errorHandler.js           Centralised error handler + 404 handler
-    rateLimiter.js            In-memory sliding-window IP rate limiter
-    requestId.js              X-Request-Id generation and propagation
-    requestLogger.js          Structured JSON request logs
-    securityHeaders.js        Security response headers (CSP, X-Frame, etc.)
+    errorHandler.js               Centralised error handler + 404
+    rateLimiter.js                In-memory sliding-window IP rate limiter
+    requestId.js                  X-Request-Id generation and propagation
+    requestLogger.js              Structured JSON request logs
+    securityHeaders.js            Security response headers
   services/
-    classifier.js             Query-type classifier
-    claudeClient.js           Anthropic API client with retry logic
-    confidence.js             Confidence scoring and action routing
-    fallbackReply.js          Deterministic templates used when Claude is unavailable
+    classifier.js                 Priority-ordered regex query classifier
+    claudeClient.js               Multi-provider routing engine (Claude → Groq → Gemini)
+    confidence.js                 Confidence scoring and action routing
+    fallbackReply.js              Tone-aware deterministic templates
+    messageStore.js               Conversation history fetch + message persistence
+    db.js                         PostgreSQL connection pool (Neon)
+    clients/
+      baseClient.js               Shared prompt builders, callClaude(), response parser
+      groqClient.js               Groq API client (OpenAI-compatible)
+      geminiClient.js             Gemini API client
+      availabilityClient.js       Type prompt: pre_sales_availability
+      pricingClient.js            Type prompt: pre_sales_pricing
+      checkinClient.js            Type prompt: post_sales_checkin
+      specialRequestClient.js     Type prompt: special_request
+      complaintClient.js          Type prompt: complaint
+      generalEnquiryClient.js     Type prompt: general_enquiry
   utils/
-    retry.js                  Exponential backoff with jitter
+    retry.js                      Exponential backoff with jitter, retries network errors
 scripts/
-  seed.js                     Sample data seed script
-  test-webhook.js             End-to-end test script (no external dependencies)
-schema.sql                    Part 2 — PostgreSQL schema (all tables, indexes, constraints)
-thinking.md                   Part 3 — written design answers
+  seed.js                         Sample data seed script
+  test-webhook.js                 End-to-end test (no external test runner needed)
+schema.sql                        Part 2 — full PostgreSQL schema
+thinking.md                       Part 3 — written design answers
+.env.example                      Environment variable template (no real keys)
 ```
 
 ---
@@ -72,20 +95,22 @@ npm install
 
 # 2. Configure environment
 cp .env.example .env
-# Fill in DATABASE_URL (Neon connection string) and ANTHROPIC_API_KEY
+# Add at minimum one AI key (ANTHROPIC_API_KEY or GROQ_API_KEY) and DATABASE_URL
 
-# 3. Apply the database schema (run once against your Neon / PostgreSQL instance)
+# 3. Apply the database schema
 psql "$DATABASE_URL" -f schema.sql
 
 # 4. (Optional) Seed sample data
 node scripts/seed.js
 
 # 5. Start the server
-npm start
+npm run dev
 
-# 6. Run end-to-end tests
+# 6. Run the end-to-end test suite
 npm test
 ```
+
+**Minimum viable setup**: the server works without a database (message persistence is skipped) and without any AI key (text fallback replies are used). For a full run you need at least one AI key and a PostgreSQL connection string.
 
 ---
 
@@ -124,10 +149,11 @@ Accepts an inbound guest message, classifies it, drafts a reply, and returns a c
 ```json
 {
   "message_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "query_type": "pre_sales_availability",
-  "drafted_reply": "Hi Rahul! Great news — Villa B1 is available April 20–24. The rate is INR 18,000/night for up to 4 guests, so your 2-adult stay would be INR 72,000 for 4 nights. Shall I hold a provisional booking for you?",
-  "confidence_score": 0.95,
-  "action": "auto_send"
+  "query_type": "pre_sales_pricing",
+  "drafted_reply": "Hi Rahul! The rate for Villa B1 is INR 18,000/night for up to 4 guests, so a 4-night stay (Apr 20–24) comes to INR 72,000 for 2 adults. Want me to check availability and hold a provisional booking? ✨",
+  "confidence_score": 0.88,
+  "action": "auto_send",
+  "reply_source": "groq"
 }
 ```
 
@@ -135,11 +161,12 @@ Accepts an inbound guest message, classifies it, drafts a reply, and returns a c
 
 | Field | Type | Description |
 |---|---|---|
-| `message_id` | string | UUID generated for this message |
+| `message_id` | string | UUID for this message |
 | `query_type` | string | Classified intent (see below) |
 | `drafted_reply` | string | AI-drafted reply text |
-| `confidence_score` | number | 0.00–1.00 |
+| `confidence_score` | number | 0.00–1.00 (see scoring section) |
 | `action` | string | `auto_send` \| `agent_review` \| `escalate` |
+| `reply_source` | string | `claude` \| `groq` \| `gemini` \| `fallback` |
 
 **Error responses**
 
@@ -151,82 +178,89 @@ Accepts an inbound guest message, classifies it, drafts a reply, and returns a c
 | `429` | `RATE_LIMIT_EXCEEDED` | More than 60 requests/min from same IP |
 | `500` | `INTERNAL_ERROR` | Unexpected server error |
 
-All error responses include a `requestId` field matching the `X-Request-Id` response header, enabling trivial log correlation.
+All error responses include a `requestId` field matching the `X-Request-Id` response header for log correlation.
 
 ---
 
 ### `GET /health`
 
-Returns server liveness. No auth required — intended for load balancer health checks.
+Returns server liveness. No auth required.
 
 ```json
-{
-  "status": "ok",
-  "timestamp": "2026-05-05T10:30:00.000Z",
-  "uptimeSeconds": 3600
-}
+{ "status": "ok", "timestamp": "2026-05-05T10:30:00.000Z", "uptimeSeconds": 3600 }
 ```
 
 ---
 
 ## Query classification
 
-The classifier applies priority-ordered regex rules. Each message is assigned exactly one type; the first matching rule wins. Priority order matters — a complaint that also mentions pricing is still classified as `complaint` so it is always escalated to a human.
+The classifier applies priority-ordered regex rules. Each message is assigned one primary type (and all matched types for multi-topic messages). Priority order prevents misclassification — a complaint that also mentions a price is still classified as `complaint` and always escalated.
 
-| Priority | Type | Example |
-|---|---|---|
-| 1 | `complaint` | "The AC is not working, I am not happy" |
-| 2 | `special_request` | "Can you arrange an airport pickup?" |
-| 3 | `post_sales_checkin` | "What time can we check in? WiFi password?" |
-| 4 | `pre_sales_availability` | "Is the villa free April 20–24?" |
-| 5 | `pre_sales_pricing` | "What is the nightly rate for 4 guests?" |
-| 6 | `general_enquiry` | "Do you allow pets?" (default) |
+| Priority | Type | Trigger | Example |
+|---|---|---|---|
+| 1 | `complaint` | Anger, damage, malfunction keywords | "The AC is not working, I am not happy" |
+| 2 | `special_request` | Transport, chef, early/late check-in, celebration | "Can you arrange an airport pickup?" |
+| 3 | `post_sales_checkin` | Check-in time, WiFi, door code | "What time can we check in? WiFi password?" |
+| 4 | `pre_sales_pricing` | Rate, cost, per night, how much | "What is the nightly rate for 4 guests?" |
+| 5 | `general_enquiry` | Pets, parking, pool, smoking policy | "Do you allow pets?" |
+| 6 | `pre_sales_availability` | Dates, availability, can we book | "Is the villa free April 20–24?" (default) |
+
+Multi-topic messages (e.g. "available April 20? Also, what's the WiFi?") are detected by the classifier and sent to the AI with a combined system prompt that addresses all matched topics in one reply.
 
 ---
 
 ## Confidence scoring
 
-The confidence score represents **how certain we are that the AI-drafted reply is accurate and complete enough to send without human review**.
+The confidence score represents **how certain we are that the drafted reply is accurate and complete enough to send without human review**.
+
+### Formula
 
 ```
-score = type_baseline + source_delta + quality_delta + length_delta
+heuristic = type_baseline + source_delta + quality_delta + length_delta
+
+final_score = claudeConfidence × 0.65 + heuristic × 0.35   (when AI returns its own score)
+            = heuristic                                       (when fallback is used)
 ```
 
-**Type baseline** — factual queries with deterministic answers score highest:
+When the AI returns a self-reported confidence value (embedded in its JSON output), it carries **65% weight** — the model has read the actual message and knows how well its reply covers the question. The heuristic captures structural signals the model cannot see (channel trust, fallback penalty, reply completeness).
+
+### Type baseline
+
+Factual queries with deterministic answers score highest. Complaint is hardcoded low because a human should always review it, regardless of how well-written the AI reply is.
 
 | Query type | Baseline | Rationale |
 |---|---|---|
-| `post_sales_checkin` | 0.90 | Fixed facts: check-in time, WiFi password |
-| `pre_sales_availability` | 0.87 | Direct answer from property data |
-| `pre_sales_pricing` | 0.85 | Deterministic calculation |
-| `special_request` | 0.72 | Needs a human to actually arrange it |
+| `post_sales_checkin` | 0.90 | Fixed facts: check-in time, WiFi password — verifiable |
+| `pre_sales_availability` | 0.87 | Direct answer from property availability window |
+| `pre_sales_pricing` | 0.85 | Deterministic arithmetic, clear formula |
+| `special_request` | 0.72 | Reply gathers info, but a human must actually arrange it |
 | `general_enquiry` | 0.70 | Wide range of possible sub-questions |
-| `complaint` | 0.40 | Requires empathy and human follow-up |
+| `complaint` | 0.40 | Requires human empathy and follow-up — never auto-send |
 
-**Source delta** — established booking platforms carry richer booking context:
+### Source delta
 
-| Source | Delta |
+| Source | Delta | Rationale |
+|---|---|---|
+| `direct` | +0.03 | Direct booking — richest context |
+| `booking_com` | +0.02 | Reservation confirmed, structured data |
+| `airbnb` | +0.02 | Reservation confirmed |
+| `whatsapp` | +0.01 | Common channel, often informal |
+| `instagram` | 0.00 | Can be anyone; least context |
+
+### Quality delta
+
+| Origin | Delta |
 |---|---|
-| `direct` | +0.03 |
-| `booking_com` | +0.02 |
-| `airbnb` | +0.02 |
-| `whatsapp` | +0.01 |
-| `instagram` | 0.00 |
+| AI reply (Claude/Groq/Gemini) | +0.05 |
+| Text fallback template | −0.10 |
 
-**Quality delta** — Claude adapts to context; a template is generic:
-
-| Reply origin | Delta |
-|---|---|
-| Claude API | +0.05 |
-| Fallback template | −0.10 |
-
-**Length delta** — a very short reply is likely incomplete:
+### Length delta
 
 | Reply length | Delta |
 |---|---|
-| > 100 chars | +0.03 |
-| 40–100 chars | +0.01 |
-| < 40 chars | −0.05 |
+| > 100 characters | +0.03 |
+| 40–100 characters | +0.01 |
+| < 40 characters | −0.05 (likely incomplete) |
 
 ### Action routing
 
@@ -235,26 +269,54 @@ score = type_baseline + source_delta + quality_delta + length_delta
 | > 0.85 | `auto_send` | Send immediately without review |
 | 0.60–0.85 | `agent_review` | Queue for human approval |
 | < 0.60 | `escalate` | Route to senior agent |
-| `complaint` (any score) | `escalate` | Always, regardless of score |
+| `complaint` (any score) | `escalate` | Hardcoded — always bypasses auto-send |
+
+Multi-type messages use the **lowest** baseline across all matched types (most conservative wins).
+
+---
+
+## Multi-provider AI chain
+
+The server tries three AI providers in sequence before falling back to text templates. Each provider has a per-type token budget — output tokens are sized to the actual reply length needed, avoiding over-spending.
+
+| Provider | Role | Model |
+|---|---|---|
+| Claude (Anthropic) | Primary | `claude-sonnet-4-20250514` |
+| Groq | Secondary | `llama-3.3-70b-versatile` |
+| Gemini | Tertiary | `gemini-2.0-flash` |
+| Text templates | Always succeeds | — |
+
+**Per-type token budgets** (max output tokens):
+
+| Query type | Max tokens | Rationale |
+|---|---|---|
+| `post_sales_checkin` | 150 | Factual, brief answers |
+| `pre_sales_availability` | 180 | Date check + rate quote |
+| `general_enquiry` | 180 | Direct factual answer |
+| `pre_sales_pricing` | 200 | Math shown + brief reply |
+| `special_request` | 220 | Acknowledge + gather details |
+| `complaint` | 250 | Empathy + action steps |
+
+All AI calls include a 15-second `AbortController` timeout. Network errors (`fetch failed`) are retried once with exponential backoff before moving to the next provider.
 
 ---
 
 ## Reliability features
 
-- **Retry with exponential backoff** — the Claude API client retries up to 3 times on transient errors (429, 500, 502, 503, 529). Jitter (±10%) prevents thundering-herd reconnects after an outage.
-- **Fallback replies** — if all Claude retries fail, a deterministic template is returned. The server never returns a 500 for a structurally valid payload.
-- **Graceful shutdown** — `SIGTERM`/`SIGINT` drains active connections before exiting (10-second hard timeout, then force exit).
-- **Rate limiting** — 60 requests/minute per IP, sliding window, in-memory. For multi-process deployments, swap the `Map` in `rateLimiter.js` for a shared Redis store.
-- **Structured JSON logging** — all request logs and errors are emitted as JSON objects with `requestId`, `durationMs`, and `timestamp` so they are ready for any log aggregator (Datadog, Loki, CloudWatch).
-- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, and `Referrer-Policy` are set on every response; `X-Powered-By` is suppressed.
+- **Three-tier AI fallback** — Claude → Groq → Gemini → text templates. The server never returns a 500 for a structurally valid payload.
+- **Retry with exponential backoff + jitter** — retries on transient HTTP errors (429, 500, 502, 503, 529) and network-level failures. Jitter (±10%) prevents thundering-herd reconnects.
+- **15-second per-request timeout** — every AI call is wrapped in `AbortController`. Slow responses fail fast and fall through to the next provider.
+- **Graceful shutdown** — `SIGTERM`/`SIGINT` drains active connections (10-second hard timeout, then force exit).
+- **Rate limiting** — 60 requests/minute per IP, sliding window, in-memory. Swap the `Map` in `rateLimiter.js` for Redis when running multiple processes.
+- **Structured JSON logging** — every request, error, and AI provider attempt is emitted as a JSON object with `requestId`, `durationMs`, `reply_source`, and `timestamp`. Ready for any log aggregator.
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy` on every response; `X-Powered-By` suppressed.
+- **Non-blocking DB writes** — message persistence is fire-and-forget with `.catch()` error logging. A DB failure never delays or breaks the API response.
 
 ---
 
 ## Part 2 — PostgreSQL Schema
 
-See [`schema.sql`](schema.sql) for full `CREATE TABLE` statements, indexes, constraints, and design rationale.
-
-### Tables
+See [`schema.sql`](schema.sql) for full `CREATE TABLE` statements, indexes, constraints, and inline design rationale.
 
 | Table | Purpose |
 |---|---|
@@ -263,16 +325,10 @@ See [`schema.sql`](schema.sql) for full `CREATE TABLE` statements, indexes, cons
 | `staff` | Internal agents and managers who review AI drafts |
 | `reservations` | Bookings linking guests to properties |
 | `conversations` | Thread grouping messages by guest + channel |
-| `messages` | Every inbound and outbound message, with AI draft and dispatch tracking fields |
+| `messages` | Every inbound/outbound message with AI draft and dispatch tracking |
 
-### Hardest design decision — guest identity across channels
+---
 
-A guest who messages on WhatsApp (`+91-9876-543210`) may be the same person who has an Airbnb booking under "Rahul S." — there is no guaranteed shared identifier across channels.
+## Part 3 — Written answers
 
-Three options were considered:
-
-1. **Require email as canonical key** — fails for WhatsApp-only guests who never share an email address.
-2. **Fuzzy-match on name + contact** — fragile; false positives create merged records that are difficult to undo and can corrupt booking history.
-3. **Late-binding / explicit merge** — create one row per channel contact, allow staff (or an async identity-resolution job) to merge rows explicitly once identity is confirmed.
-
-**Choice: option 3**, implemented as nullable `UNIQUE` columns on the `guests` table (`phone_whatsapp`, `airbnb_id`, `booking_com_id`, etc.). A first-contact guest starts as a new row. Once a staff member (or resolver job) confirms two records belong to the same person, they set both identifiers on one row and remove the duplicate. This avoids irreversible premature merges while maintaining a clean single-record model after resolution.
+See [`thinking.md`](thinking.md).
