@@ -43,6 +43,64 @@ When no AI confidence is available (API down, fallback used), the heuristic driv
 
 These thresholds are intentionally conservative. Over-routing to `agent_review` costs 30 seconds of an agent's time; auto-sending a wrong reply damages guest trust and can corrupt booking data.
 
+### Tone detection and emoji — how and why
+
+#### Guest tone detection
+
+Every incoming message is run through `detectGuestTone()` before the AI prompt is built. The function applies three regex passes in priority order:
+
+| Detected tone | Trigger keywords | Full instruction sent to AI |
+|---|---|---|
+| **Urgent / distressed** | "urgent", "emergency", "not happy", "no hot water", "3 am", "no power", "unacceptable"… | *"respond with calm, direct empathy; drop all cheerfulness and exclamation marks"* |
+| **Excited / enthusiastic** | "can't wait", "amazing", "looking forward", "so happy", "love it"… | *"match their energy with genuine warmth"* |
+| **Polite / measured** | "please", "could you", "would it be possible", "if that's okay"… | *"reply warmly but respect their considered tone"* |
+| **Neutral** | (default — none of the above matched) | *"warm and natural"* |
+
+This label is injected directly into the user-facing part of the AI prompt as `Guest tone: <label>`. The AI is instructed to *mirror* the guest's energy — responding with the same register they used rather than defaulting to a single corporate tone regardless of context.
+
+The most important case is **urgent/distressed**. A guest messaging at 3 AM because there's no hot water does not want exclamation marks, warmth, or emoji. They want someone who sounds calm, competent, and already on it. Detecting this and stripping all cheerfulness from the instruction is what separates a system that reads the room from one that adds a 😊 to a complaint.
+
+#### Channel-aware tone guide
+
+Separately from guest tone, each source channel gets its own base tone instruction (`CHANNEL_TONE`):
+
+| Channel | Instruction |
+|---|---|
+| `whatsapp` | Casual and warm. End with one mood-matching emoji. |
+| `airbnb` | Warm and conversational. End with one mood-matching emoji. |
+| `instagram` | Relaxed, friendly, brief. End with one or two mood-matching emoji. |
+| `booking_com` | Warm but professionally structured. No emoji. |
+| `direct` | Professional and warm. No emoji. |
+
+Booking.com and direct bookings attract guests who expect a more formal, hotel-like communication style. Emoji on these channels reads as unprofessional. WhatsApp and Instagram guests expect messaging-app-native language — no emoji on WhatsApp would feel cold and corporate.
+
+When an urgent tone is detected, the channel emoji instruction is **overridden** regardless of channel. Even on WhatsApp (where emoji are normally required), the instruction is rewritten to: *"Do not include any emoji in your reply."* A distressed guest on WhatsApp still gets no emoji.
+
+#### Emoji selection for fallback replies
+
+When the AI is unavailable and a template reply is used, `appendEmoji()` adds an emoji at the code level using the same tone × channel matrix:
+
+| Channel | Excited tone | Polite tone | Neutral tone | Urgent tone |
+|---|---|---|---|---|
+| `instagram` | ✨ | 😊 | 🙂 | — (none) |
+| `whatsapp` | 😊 | 🙂 | ✨ | — (none) |
+| `airbnb` | 😊 | 🙂 | ✨ | — (none) |
+| `booking_com` | — | — | — | — |
+| `direct` | — | — | — | — |
+
+The emoji choices are intentional:
+- **✨** (sparkle) — default warm/positive. Works across contexts without implying too much.
+- **😊** (warm smile) — used when the guest is excited; matches their energy without being over-the-top.
+- **🙂** (gentle smile) — used for polite/measured guests; respects their more restrained register.
+
+Instagram gets sparkle as default (more playful channel norm); WhatsApp/Airbnb get sparkle too, but the mapping for excited and polite is swapped slightly — WhatsApp tone tends to be warmer than Instagram's relaxed style.
+
+#### Why this matters
+
+Emoji in guest messaging are not decoration — they are a signal of channel fluency. A hospitality brand that sends emoji-free replies on WhatsApp sounds like a corporate help desk. A brand that sends 😊 on Booking.com sounds amateurish. A brand that replies to a complaint at 3 AM with ✨ sounds like it did not read the message.
+
+Getting this right — right channel, right tone, right emoji or no emoji — is what makes the reply feel like it came from a person who understood the guest, not a bot that filled in a template. That's the purpose of the entire tone and emoji system: keep the reply within the 150-word limit while still communicating warmth, competence, or urgency through something as small as one character at the end of a sentence.
+
 ### Multi-provider AI strategy
 
 Rather than depending on a single AI provider, the system implements a three-tier fallback chain: **Claude → Groq → Gemini → text templates**.
