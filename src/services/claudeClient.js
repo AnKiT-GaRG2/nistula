@@ -2,7 +2,6 @@ import { config } from '../config.js';
 import { generateFallbackReply } from './fallbackReply.js';
 import { buildSystemPrompt, buildCombinedSystemPrompt, callClaude } from './clients/baseClient.js';
 import { callGroq } from './clients/groqClient.js';
-import { callGemini } from './clients/geminiClient.js';
 import { TYPE_PROMPT as availabilityPrompt }   from './clients/availabilityClient.js';
 import { TYPE_PROMPT as pricingPrompt }         from './clients/pricingClient.js';
 import { TYPE_PROMPT as checkinPrompt }         from './clients/checkinClient.js';
@@ -35,7 +34,7 @@ const DEFAULT_CONFIG = { maxTokens: 180 };
 
 // Fixed provider sequence for all query types
 const GROQ_70B    = 'llama-3.3-70b-versatile';
-const PROVIDERS   = ['claude', 'groq-70b', 'gemini'];
+const PROVIDERS   = ['claude', 'groq-70b'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function resolveConfig(normalizedMessage) {
@@ -57,19 +56,17 @@ function getSystemPromptForMessage(normalizedMessage) {
 function isProviderAvailable(provider) {
   if (provider === 'groq-70b') return Boolean(config.groqApiKey);
   if (provider === 'claude')   return Boolean(config.anthropicApiKey);
-  if (provider === 'gemini')   return Boolean(config.geminiApiKey);
   return false;
 }
 
 function providerLabel(provider) {
-  return { 'groq-70b': 'groq', claude: 'claude', gemini: 'gemini' }[provider] ?? provider;
+  return { 'groq-70b': 'groq', claude: 'claude' }[provider] ?? provider;
 }
 
 async function callProvider(provider, systemPrompt, msg, maxTokens) {
   switch (provider) {
     case 'groq-70b': return callGroq(systemPrompt, msg, { maxTokens, model: GROQ_70B });
     case 'claude':   return callClaude(systemPrompt, msg, { maxTokens });
-    case 'gemini':   return callGemini(systemPrompt, msg, { maxTokens });
   }
 }
 

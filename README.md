@@ -27,8 +27,7 @@ POST /webhook/message
       │     ┌─────────────────────────────────────────────────────────┐
       │     │  Tier 1: Claude (Anthropic) — primary, highest quality  │
       │     │  Tier 2: Groq (Llama 70B)  — fast, cost-effective       │
-      │     │  Tier 3: Gemini Flash      — tertiary fallback           │
-      │     │  Tier 4: Text templates    — always succeeds             │
+      │     │  Tier 3: Text templates    — always succeeds             │
       │     └─────────────────────────────────────────────────────────┘
       │
   calculateConfidence()     — multi-dimensional score [0.00–1.00]
@@ -255,7 +254,6 @@ Reflects which AI provider drafted the reply — not just AI vs template.
 |---|---|---|
 | `claude` | +0.05 | Primary; richest instruction-following and persona adherence |
 | `groq` | +0.03 | Strong reasoning; slightly less nuanced |
-| `gemini` | +0.02 | Capable; different training distribution adds small uncertainty |
 | `fallback` | −0.15 | Generic template — ignores the actual message entirely |
 
 ### Length delta (query-type aware)
@@ -343,13 +341,12 @@ return +0.01;
 
 ## Multi-provider AI chain
 
-The server tries three AI providers in sequence before falling back to text templates. Each provider has a per-type token budget — output tokens are sized to the actual reply length needed, avoiding over-spending.
+The server tries two AI providers in sequence before falling back to text templates. Each provider has a per-type token budget — output tokens are sized to the actual reply length needed, avoiding over-spending.
 
 | Provider | Role | Model |
 |---|---|---|
 | Claude (Anthropic) | Primary | `claude-sonnet-4-20250514` |
 | Groq | Secondary | `llama-3.3-70b-versatile` |
-| Gemini | Tertiary | `gemini-2.0-flash` |
 | Text templates | Always succeeds | — |
 
 **Per-type token budgets** (max output tokens):
@@ -369,7 +366,7 @@ All AI calls include a 15-second `AbortController` timeout. Network errors (`fet
 
 ## Reliability features
 
-- **Three-tier AI fallback** — Claude → Groq → Gemini → text templates. The server never returns a 500 for a structurally valid payload.
+- **Two-tier AI fallback** — Claude → Groq → text templates. The server never returns a 500 for a structurally valid payload.
 - **Retry with exponential backoff + jitter** — retries on transient HTTP errors (429, 500, 502, 503, 529) and network-level failures. Jitter (±10%) prevents thundering-herd reconnects.
 - **15-second per-request timeout** — every AI call is wrapped in `AbortController`. Slow responses fail fast and fall through to the next provider.
 - **Graceful shutdown** — `SIGTERM`/`SIGINT` drains active connections (10-second hard timeout, then force exit).

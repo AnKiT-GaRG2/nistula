@@ -43,7 +43,6 @@ const SOURCE_DELTA = {
 const PROVIDER_DELTA = {
   claude:   0.05,   // Primary; richest instruction-following and persona adherence
   groq:     0.03,   // Strong reasoning; slightly less nuanced than Claude
-  gemini:   0.02,   // Capable; different training distribution — small uncertainty bump
   fallback: -0.15,  // Generic template; ignores the specific message content
 };
 
