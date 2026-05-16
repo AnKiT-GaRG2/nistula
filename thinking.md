@@ -1,209 +1,37 @@
-# Thinking — Nistula Technical Assessment
+# Part 3 — Thinking
+
+Scenario: 3 AM. A guest at Villa B1 sends a WhatsApp message: *"There is no hot water and we have guests arriving for breakfast in 4 hours. This is unacceptable. I want a refund for tonight."*
 
 ---
 
-## Part 1 — Webhook & AI Integration
+## Question A — The Immediate Response
 
-### How I approached the confidence scoring
+**The message:**
 
-The core question is: *how certain are we that this AI draft is accurate and complete enough to send without a human reading it first?*
+> Hi [name], I'm truly sorry — no hot water with guests arriving for breakfast in 4 hours is completely unacceptable. I'm waking the team up right now. You'll get a call within 15 minutes with a fix for tonight.
 
-I broke the score into four independent heuristic dimensions, then blended in the AI's own self-assessment when available.
-
-**1. Query type baseline — the dominant signal**
-
-The biggest driver of score is the type of question. Queries with deterministic, verifiable answers (check-in time, WiFi password, a nightly rate calculation) should score high because the answer space is narrow and the AI has the correct answer in its context window. Complaints score low by design — not because the AI writes poor empathy, but because a human should *always* review a complaint before it goes out. Complaint also has a hardcoded rule that forces `escalate` regardless of the score, as a separate safety net.
-
-**2. Source channel delta — small but meaningful**
-
-A guest on Booking.com has an attached reservation with structured data. An Instagram DM can come from anyone. Small adjustments (0.00–0.03) rather than large swings, because channel alone isn't a strong signal — it tilts the scale without dominating it.
-
-**3. AI vs. fallback delta**
-
-A Claude/Groq/Gemini reply is context-aware: it reads the actual message, addresses the specific question, and follows the persona prompt. A template reply is generic. Fallback gets −0.10 as a meaningful penalty, ensuring template responses queue for human review rather than auto-sending.
-
-**4. Reply length delta**
-
-A reply under 40 characters is almost certainly malformed, truncated, or off-topic — it should never auto-send. Over 100 characters generally means the AI answered something substantial. Small adjustments (±0.03/0.05), not a primary driver.
-
-**Blending with the AI's self-reported confidence**
-
-When the AI returns a `confidence` field in its JSON output (which the system prompt instructs it to), that value carries **65% weight**. The model has read the actual message and knows how well its reply covers the question — that signal is stronger than any heuristic. The heuristic (35%) captures structural signals the model cannot see: channel trust, whether we fell back to a template, and reply completeness.
-
-When no AI confidence is available (API down, fallback used), the heuristic drives the score entirely.
-
-**Final clamping** to `[0.00, 1.00]`, rounded to 2 decimal places so the number is auditable and meaningful.
-
-### Routing thresholds
-
-- `> 0.85` → `auto_send`: High confidence, factual query, AI replied with a verifiable answer. Safe to send immediately.
-- `0.60–0.85` → `agent_review`: Plausible reply, but warrants a quick human scan before delivery.
-- `< 0.60` → `escalate`: Low confidence, ambiguous question, or missing context. Route to a senior agent.
-- `complaint` → always `escalate`, regardless of score.
-
-These thresholds are intentionally conservative. Over-routing to `agent_review` costs 30 seconds of an agent's time; auto-sending a wrong reply damages guest trust and can corrupt booking data.
-
-### Tone detection and emoji — how and why
-
-#### Guest tone detection
-
-Every incoming message is run through `detectGuestTone()` before the AI prompt is built. The function applies three regex passes in priority order:
-
-| Detected tone | Trigger keywords | Full instruction sent to AI |
-|---|---|---|
-| **Urgent / distressed** | "urgent", "emergency", "not happy", "no hot water", "3 am", "no power", "unacceptable"… | *"respond with calm, direct empathy; drop all cheerfulness and exclamation marks"* |
-| **Excited / enthusiastic** | "can't wait", "amazing", "looking forward", "so happy", "love it"… | *"match their energy with genuine warmth"* |
-| **Polite / measured** | "please", "could you", "would it be possible", "if that's okay"… | *"reply warmly but respect their considered tone"* |
-| **Neutral** | (default — none of the above matched) | *"warm and natural"* |
-
-This label is injected directly into the user-facing part of the AI prompt as `Guest tone: <label>`. The AI is instructed to *mirror* the guest's energy — responding with the same register they used rather than defaulting to a single corporate tone regardless of context.
-
-The most important case is **urgent/distressed**. A guest messaging at 3 AM because there's no hot water does not want exclamation marks, warmth, or emoji. They want someone who sounds calm, competent, and already on it. Detecting this and stripping all cheerfulness from the instruction is what separates a system that reads the room from one that adds a 😊 to a complaint.
-
-#### Channel-aware tone guide
-
-Separately from guest tone, each source channel gets its own base tone instruction (`CHANNEL_TONE`):
-
-| Channel | Instruction |
-|---|---|
-| `whatsapp` | Casual and warm. End with one mood-matching emoji. |
-| `airbnb` | Warm and conversational. End with one mood-matching emoji. |
-| `instagram` | Relaxed, friendly, brief. End with one or two mood-matching emoji. |
-| `booking_com` | Warm but professionally structured. No emoji. |
-| `direct` | Professional and warm. No emoji. |
-
-Booking.com and direct bookings attract guests who expect a more formal, hotel-like communication style. Emoji on these channels reads as unprofessional. WhatsApp and Instagram guests expect messaging-app-native language — no emoji on WhatsApp would feel cold and corporate.
-
-When an urgent tone is detected, the channel emoji instruction is **overridden** regardless of channel. Even on WhatsApp (where emoji are normally required), the instruction is rewritten to: *"Do not include any emoji in your reply."* A distressed guest on WhatsApp still gets no emoji.
-
-#### Emoji selection — AI-driven, not hardcoded
-
-Rather than limiting the AI to a fixed set of emoji, the channel tone instruction simply tells the AI to **choose any emoji that genuinely fits the specific context and emotion of the message**:
-
-- WhatsApp/Airbnb: *"End your reply with a single emoji that genuinely fits the specific context and emotion of this message."*
-- Instagram: *"End your reply with one or two emoji that naturally fit the mood of this specific message."*
-- Booking.com / direct: *"Do not include any emoji in your reply."*
-
-The AI picks freely based on what was actually said. A guest excited about a birthday celebration might get 🎂. A pool question on a hot day might get 🌊. A pricing confirmation might get 👌. This is more human than any hardcoded matrix — the AI has read the full message and knows what fits, whereas a code-level lookup only knows the tone category.
-
-The emoji is embedded inside the `drafted_reply` string in the AI's JSON response and is parsed out as part of the reply text — no separate post-processing needed.
-
-**Fallback replies (AI unavailable)** — when all three AI providers fail, no emoji is added to the generic text template. A template reply was written without reading the guest's actual message, so no code-level logic can pick an emoji that genuinely fits. A template without emoji is more honest than one with a randomly chosen character.
-
-#### Why this matters
-
-Emoji in guest messaging are a signal of channel fluency. A WhatsApp reply with no emoji sounds like a corporate help desk. A Booking.com reply with emoji sounds amateurish. A reply to a 3 AM complaint with a cheerful emoji sounds like the sender did not read the message.
-
-Letting the AI choose the emoji from the full context of the conversation — rather than mapping tone categories to a fixed list of three characters — is what makes a reply feel native to the specific moment, not just the channel category.
-
-### Multi-provider AI strategy
-
-Rather than depending on a single AI provider, the system implements a three-tier fallback chain: **Claude → Groq → Gemini → text templates**.
-
-The rationale is reliability over cost optimisation. Any single API can have outages, rate limits, or key expiry. A chain means:
-
-- Claude (Anthropic Sonnet) provides the highest-quality replies — richest persona adherence and most nuanced empathy for complaints.
-- Groq (Llama 3.3 70B) is fast and cost-effective. At ~$0.59/M input tokens vs. Claude's ~$3/M, it handles the majority of traffic when Claude is unavailable.
-- Gemini Flash is a tertiary safety net — very cheap and reaches different infrastructure.
-- Text templates guarantee the server always returns *something* useful rather than a 500.
-
-Each provider receives a per-type token budget (150–250 output tokens) sized to what each reply actually needs. Pricing replies need 200 tokens to show the arithmetic; a check-in reply needs only 150. Allocating 512 tokens uniformly (the naive default) wastes money on every request.
-
-### What I would add with more time
-
-- **Feedback loop**: track which `auto_sent` replies received a negative guest follow-up (sentiment-detected, within 10 minutes) and feed that signal back into the type baselines quarterly.
-- **Per-property live context**: the system prompt uses a static property string. With a real DB, I'd pull the actual `properties` row and inject live rates, current availability calendar, and real amenity data.
-- **Structured tool use**: instead of asking the AI to return JSON via a system prompt, use the Anthropic tool-use API (or Groq's equivalent). Forces a schema, eliminates the JSON-extraction regex fallback, and makes confidence a typed field rather than a parsed number.
-- **Streaming**: for the staff review UI, streaming the draft reply as it's generated reduces perceived latency by 60–80%.
-- **Conversation-aware routing**: if the prior conversation shows the guest is already frustrated, the system should escalate even a normally high-confidence query type.
+**Why this wording:** The system detects urgent tone and strips all emoji and cheerfulness from the reply — a distressed guest at 3 AM does not want sparkles. The reply names the specific detail (breakfast in 4 hours) so the guest knows their message was actually read. It commits to a concrete next step (call in 15 minutes) rather than vague reassurance. The refund request is not addressed in the AI reply — that is a human decision requiring context on fault, policy, and booking history.
 
 ---
 
-## Part 2 — PostgreSQL Schema
+## Question B — The System Design
 
-### Hardest decision: guest identity across channels
+Beyond sending the message, the platform does the following immediately:
 
-The same real person might contact via WhatsApp one day and Airbnb the next. There is no shared identifier guaranteed across all channels.
-
-Three options I considered:
-
-| Option | Problem |
-|---|---|
-| Email as canonical key | WhatsApp-only guests never provide an email |
-| Fuzzy-match on name + phone | False positives create merged records that corrupt booking history and are hard to undo |
-| Late-binding / explicit merge | Creates temporary duplicates, but merging is explicit and reversible |
-
-I chose **late-binding**: one row per channel contact, nullable `UNIQUE` columns (`phone_whatsapp`, `airbnb_id`, `booking_com_id`, `instagram_id`). A guest who contacts on two channels starts as two rows. A staff member or async identity-resolution job sets both identifiers on one row and removes the duplicate once identity is confirmed.
-
-This avoids irreversible false merges while maintaining a clean single-record model after resolution. A false merge in a booking system is far harder to unwind than a temporary duplicate.
-
-### Why AI draft fields live on `messages`, not a separate table
-
-A separate `message_drafts` table adds a JOIN on every message read and complicates the agent inbox query. The draft fields are nullable — outbound and human-typed messages have no AI fields at all. If draft revision history (multiple edit rounds before sending) becomes a requirement, adding a `message_drafts` child table is a non-breaking addition.
-
-### Why `raw_payload JSONB`
-
-Storing the original webhook body means:
-1. Any message can be re-processed after a classifier or prompt bug fix without asking the source channel to re-send.
-2. Full audit trail for compliance without a separate event-log table.
-3. Channel-specific fields that don't fit the normalised schema (Airbnb's `listing_id`, Booking.com's `reservation_details`) are preserved without a schema migration.
-
-### Why `conversations` is a first-class entity
-
-Without it, "show all messages in this thread" requires a self-join or a denormalised `thread_id` on `messages`. Making conversation a real table also lets us track escalation state at the thread level (`conversations.status = 'escalated'`), not just per-message — a conversation is escalated, not just one message within it.
-
-### Indexes chosen and why
-
-- `idx_guests_full_name` (GIN full-text): for the staff search UI — "find a guest named Rahul".
-- `idx_reservations_guest/property`: FK lookups and property availability calendar queries.
-- `idx_reservations_status` (partial, excludes `checked_out`/`cancelled`): the active-booking list never needs completed statuses. Partial indexes keep it fast and small.
-- `idx_conversations_open` (partial, `status = 'open'`): the agent review queue only touches open conversations.
-- `idx_messages_pending_review` (partial, inbound + null `dispatch_status`): the most important query — find unreviewed inbound messages sorted by confidence score ascending (lowest confidence first, as these need the most urgent human attention).
+1. **Logs everything** — `dispatch_status = 'escalated'`, conversation `status = 'escalated'`, full `raw_payload` stored in the DB for audit and replay.
+2. **Notifies simultaneously** — push notification + SMS to the on-call caretaker and property manager at the same time, not sequentially.
+3. **Starts a 30-minute timer** — if no human acknowledges (opens the platform, calls the guest, or logs an action), auto-escalate to the next tier: property manager's personal mobile, then the owner.
+4. **60-minute fallback** — if still no resolution logged, a second automated message goes to the guest: *"Our caretaker is on the way. We haven't forgotten you."*
+5. **Flags the refund** — sets a refund flag on the reservation row for staff to review in the morning. Not auto-approved.
 
 ---
 
-## Part 3 — Written Answers
+## Question C — The Learning
 
-### Q1: If you had to scale this to 10,000 messages/day, what would you change?
+Three hot water complaints at Villa B1 in two months is not a guest problem — it is a maintenance problem the platform has been watching but not acting on.
 
-**Decouple ingestion from drafting.** Right now the webhook holds the HTTP connection open while waiting for the AI to respond (1–4s). At 10,000 messages/day (~7/minute) that's manageable, but at higher load it creates a request queue. The fix: return `202 Accepted` immediately, persist the raw message to a queue (BullMQ, or a simple `pending_messages` Postgres table), and have a worker pool pull jobs and call the AI asynchronously. The staff review UI polls or uses a WebSocket to receive the drafted reply when it's ready.
+**What should have happened after complaint two:** the system should have required the property manager to log corrective action within 24 hours. No log = automatic escalation to the owner. This should be a platform rule enforced in code, not left to manual follow-up.
 
-**Replace the in-memory rate limiter.** The current `Map`-based limiter is per-process. Behind a load balancer with two Node instances, each has its own counter — a single IP can make 120 requests/minute. Replace with a Redis `INCR` + `EXPIRE` key per IP.
+**What to build:** A recurring-issue detector — when the same `property_id` and keyword cluster (`hot water`, `boiler`, `no hot water`) appear 3+ times in a 60-day window, automatically create a maintenance ticket and hold new check-ins at that property for manual review until the ticket is marked resolved.
 
-**Database reads.** 10,000 messages/day is ~7 writes/minute — well within Neon's free tier. The concern is the agent inbox *read* query, which could become expensive if thousands of unreviewed messages accumulate. Add a read replica for the inbox query; keep writes on the primary.
-
-**Circuit breaker on AI providers.** If Claude is returning 503s, don't keep hammering it — mark it as unavailable for 60 seconds and skip straight to Groq. This prevents a slow provider from serialising the request queue.
-
-**Connection pooling.** The current `pg.Pool` is per-process. Add PgBouncer (or Neon's built-in pooler) at the connection layer to prevent exhausting the Postgres connection limit when multiple Node workers run concurrently.
-
-### Q2: How would you handle a channel (e.g. WhatsApp) going down for 30 minutes?
-
-The AI fallback mechanism handles the *drafting* side already. The channel going down is different: we can draft a reply but cannot *deliver* it.
-
-The correct approach is **store-and-forward**:
-
-1. Draft the reply normally and persist it to the DB with `dispatch_status = NULL` (not yet sent) and a `retry_after = NOW() + INTERVAL '2 minutes'`.
-2. A lightweight background worker queries `WHERE dispatch_status IS NULL AND retry_after < NOW()` on a schedule (every 30 seconds).
-3. The worker attempts delivery. On success: set `dispatch_status = 'auto_sent'` and `dispatched_at = NOW()`. On failure: apply exponential backoff to `retry_after` (2m → 4m → 8m → cap at 30m).
-4. After the channel recovers, the worker sweeps the pending queue and delivers messages in `created_at ASC` order — guests who waited longest get their reply first.
-
-This is exactly why `dispatched_at` and `dispatch_status` are separate columns in the schema. `dispatch_status = NULL` is the correct state for "drafted but not yet sent", whether the reason is channel outage, agent review, or escalation.
-
-For a 30-minute outage at 7 messages/minute, the queue would accumulate ~210 pending messages. Once the channel recovers, the worker can clear the backlog in 3–5 minutes at a controlled send rate (avoid hitting WhatsApp's rate limits on reconnect).
-
-### Q3: What would you add to make the confidence score more trustworthy?
-
-**1. Historical calibration.**
-Track `auto_sent` messages where the guest sent a negative follow-up within 10 minutes (sentiment-detected: "that's wrong", "that doesn't answer my question", "what?"). Compute the actual error rate per query type per month and adjust the baselines accordingly. Right now the baselines are heuristic — this makes them empirical.
-
-**2. Hallucination detection.**
-If the drafted reply contains a price, date, or time that does not appear verbatim in the property context, apply a large negative penalty (−0.20). The model occasionally invents numbers that look plausible but are wrong. This is the failure mode most likely to damage guest trust.
-
-**3. Semantic similarity against a golden-answer library.**
-For each query type, maintain 20–30 human-written example replies. Embed both the AI reply and the nearest golden answer using a small embedding model (text-embedding-3-small). High cosine similarity → small positive delta (+0.05). This catches cases where the AI has the right facts but bizarre phrasing.
-
-**4. A/B routing experiment.**
-At low traffic, route a random 5% of `auto_send`-scored messages through `agent_review` anyway. Track whether agents edited them. If the edit rate on that 5% is below 3%, the `auto_send` threshold can safely be lowered from 0.85 to 0.80. If it's above 10%, the threshold needs to go up. This is how you move from heuristic thresholds to evidence-based ones without a large experiment infrastructure.
-
-**5. Multi-turn context penalty.**
-If the conversation history shows the guest has already asked the same question once and received a reply, the current system may give the same answer again without acknowledging the repetition. Detect repeated questions and apply a small negative delta to ensure an agent reviews the second answer before it's sent.
+**How to prevent complaint four:** A mandatory pre-arrival digital checklist item — *"Hot water verified working"* — that the caretaker must sign off before each new guest checks in. If unsigned 2 hours before check-in, the guest comms team is proactively notified so they can get ahead of it before the guest arrives.

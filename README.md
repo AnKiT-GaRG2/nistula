@@ -287,6 +287,58 @@ Thresholds scale with what each query type actually requires — pricing must sh
 | Score 0.60–0.85 | `agent_review` | Plausible — quick human scan before sending |
 | Score < 0.60 | `escalate` | Low confidence or ambiguous |
 
+Complaints and special requests are **hard-routed** before the score is even checked. A complaint with a score of 0.99 still escalates — the score is irrelevant for those types.
+
+### Worked example
+
+**Input:** pricing enquiry via WhatsApp, drafted by Groq, 180-char reply, AI self-reported confidence 0.82, no prior conversation.
+
+```
+type_baseline   =  0.85   (pre_sales_pricing)
+source_delta    = +0.01   (whatsapp)
+provider_delta  = +0.03   (groq)
+length_delta    = +0.03   (180 chars > 150 threshold)
+context_bonus   =  0.00   (no history)
+─────────────────────────
+heuristic       =  0.92
+
+final_score = 0.82 × 0.65 + 0.92 × 0.35
+           = 0.533 + 0.322
+           = 0.855  → rounds to 0.86
+action      = auto_send   (0.86 > 0.85 threshold)
+```
+
+The AI's self-reported 0.82 pulls the score slightly below the pure heuristic — it has read the message and signalled mild uncertainty (e.g. it couldn't confirm exact dates). The heuristic votes 0.92 because all structural signals are clean. The blend lands at 0.86: auto-send with no human needed.
+
+### Implementation
+
+The scoring lives in [`src/services/confidence.js`](src/services/confidence.js). Key functions:
+
+```js
+// Blend AI self-score (65%) with heuristic (35%), clamp to [0.00, 1.00]
+const raw = claudeConfidence !== null
+  ? claudeConfidence * 0.65 + heuristic * 0.35
+  : heuristic;
+return Number(Math.max(0, Math.min(1, raw)).toFixed(2));
+```
+
+```js
+// Multi-type messages: most conservative baseline wins, minus complexity penalty
+if (queryTypes?.length > 1) {
+  const min = Math.min(...queryTypes.map((t) => TYPE_BASELINE[t] ?? 0.70));
+  return min - 0.03;
+}
+```
+
+```js
+// Length delta is type-aware — pricing needs 100+ chars, checkin only 50
+const minComplete = MIN_COMPLETE_LENGTH[queryType] ?? 60;
+if (replyLength < 30)          return -0.08;  // malformed
+if (replyLength < minComplete) return -0.04;  // too short for this type
+if (replyLength > 150)         return +0.03;  // substantive answer
+return +0.01;
+```
+
 ---
 
 ## Multi-provider AI chain
