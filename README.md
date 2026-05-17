@@ -419,35 +419,6 @@ All AI calls include a 15-second `AbortController` timeout. Network errors (`fet
 
 ---
 
-## Question B — System design for escalations
-
-Beyond sending the message, the platform should immediately handle escalations in a structured way:
-
-1. **Log everything** — set `dispatch_status = 'escalated'`, mark the conversation as `escalated`, and store the full `raw_payload` in the database for audit and replay.
-2. **Notify simultaneously** — send push notification and SMS to the on-call caretaker and the property manager at the same time, not one after the other.
-3. **Start a 30-minute timer** — if nobody acknowledges the alert (opens the platform, calls the guest, or logs an action), auto-escalate to the next tier: the property manager’s personal mobile, then the owner.
-4. **60-minute fallback** — if there is still no human response, send a second automated guest update: “Our caretaker is on the way. We haven't forgotten you.”
-5. **Flag the refund** — set a refund flag on the reservation row so staff can review it in the morning. It should not be auto-approved.
-
-### Critical vs non-critical alerts
-
-Alerts are categorized into two buckets based on task importance:
-
-- **Critical** — urgent issues that affect safety, comfort, or the stay immediately, such as no power, no water, security issues, or an unresolved complaint that blocks the guest experience.
-- **Non-critical** — routine requests such as a late check-in question, extra towel request, or a general housekeeping follow-up.
-
-If a non-critical alert appears repeatedly and crosses a threshold, it should be promoted to **critical** and escalated more aggressively. That prevents “small” issues from being ignored when they keep happening.
-
-### Example
-
-- Guest sends three separate messages about a broken AC and each one is initially tagged as non-critical because it is logged as a follow-up task.
-- After the third repeat within the threshold window, the alert is promoted to **critical**.
-- Once critical, the platform immediately escalates it to the caretaker and property manager, starts the 30-minute timer, and keeps the issue visible until a human acknowledges it.
-
-This keeps the workflow simple: routine requests stay manageable, while repeated or high-impact issues are treated as urgent and moved up the chain quickly.
-
----
-
 ## Part 2 — PostgreSQL Schema
 
 See [`schema.sql`](schema.sql) for full `CREATE TABLE` statements, indexes, constraints, and inline design rationale.

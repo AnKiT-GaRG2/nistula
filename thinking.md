@@ -19,10 +19,22 @@ Scenario: 3 AM. A guest at Villa B1 sends a WhatsApp message: *"There is no hot 
 Beyond sending the message, the platform does the following immediately:
 
 1. **Logs everything** — `dispatch_status = 'escalated'`, conversation `status = 'escalated'`, full `raw_payload` stored in the DB for audit and replay.
-2. **Notifies simultaneously** — push notification + SMS to the on-call caretaker and property manager at the same time, not sequentially.
-3. **Starts a 30-minute timer** — if no human acknowledges (opens the platform, calls the guest, or logs an action), auto-escalate to the next tier: property manager's personal mobile, then the owner.
-4. **60-minute fallback** — if still no resolution logged, a second automated message goes to the guest: *"Our caretaker is on the way. We haven't forgotten you."*
-5. **Flags the refund** — sets a refund flag on the reservation row for staff to review in the morning. Not auto-approved.
+2. **Categorizes the alert** into **critical** and **non-critical**:
+	- **Critical** means the task is guest-impacting, safety-related, or time-sensitive: no hot water, AC failure, water leak, lockout, power cut, medical emergency, or any issue that can ruin the stay right away.
+	- **Non-critical** means the task can wait without immediate guest harm: extra towels, late checkout, restaurant suggestions, minor amenity questions, or housekeeping requests.
+	- If a non-critical issue is raised repeatedly over a threshold, it is promoted to **critical**. For example, if the same "extra towels" or "slow WiFi" complaint appears 3 times within a short window for the same reservation or property, the platform upgrades it to critical because it is no longer a one-off request.
+3. **Notifies simultaneously** — push notification + SMS to the on-call caretaker and property manager at the same time, not sequentially.
+4. **Starts a 30-minute timer** — if no human acknowledges (opens the platform, calls the guest, or logs an action), auto-escalate to the next tier: property manager's personal mobile, then the owner.
+5. **Critical alerts get faster escalation** — if the alert is already categorized as critical, the system skips the normal queue and immediately pages the higher-priority contacts. Non-critical alerts stay in the standard queue unless they cross the repeat threshold.
+6. **60-minute fallback** — if still no resolution logged, a second automated message goes to the guest: *"Our caretaker is on the way. We haven't forgotten you."*
+7. **Flags the refund** — sets a refund flag on the reservation row for staff to review in the morning. Not auto-approved.
+
+**Example:**
+
+- Guest says: *"There is no hot water and we have guests arriving for breakfast in 4 hours."*
+- The system marks this as **critical** immediately because it affects the stay right away.
+- It logs the incident, sends push + SMS at once, starts the 30-minute acknowledgement timer, and escalates to the next tier if nobody responds.
+- If instead the guest said *"Can I get two extra towels?"*, the alert would start as **non-critical**. But if the same request is raised multiple times and crosses the threshold, it is promoted to **critical** and handled with higher urgency.
 
 ---
 
