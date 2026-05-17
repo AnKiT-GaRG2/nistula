@@ -374,6 +374,7 @@ All AI calls include a 15-second `AbortController` timeout. Network errors (`fet
 - **Structured JSON logging** — every request, error, and AI provider attempt is emitted as a JSON object with `requestId`, `durationMs`, `reply_source`, and `timestamp`. Ready for any log aggregator.
 - **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy` on every response; `X-Powered-By` suppressed.
 - **Non-blocking DB writes** — message persistence is fire-and-forget with `.catch()` error logging. A DB failure never delays or breaks the API response.
+- **Post-booking idempotency** — booking messages are handled using the booking ID as the stable key, and that booking ID is linked to the guest’s phone number. This prevents duplicate processing when the same booking update is sent more than once, while still allowing multiple bookings for the same phone number by keeping each reservation separate under its own booking ID.
 - **Token optimisation via caching** — we can reduce AI token usage by caching replies for repeated intent patterns. For example, a `pre_sales_pricing` message containing the same key words like “rate”, “night”, and the same property context can reuse a previously generated response instead of re-sending the full prompt to the model. A cache key can be built from `query_type + normalized keywords + property_id`, so near-identical questions hit the cache while unrelated messages still go through the model.
 
 ---
