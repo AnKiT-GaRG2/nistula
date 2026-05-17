@@ -207,6 +207,21 @@ The classifier applies priority-ordered regex rules. Each message is assigned on
 
 Multi-topic messages (e.g. "available April 20? Also, what's the WiFi?") are detected by the classifier and sent to the AI with a combined system prompt that addresses all matched topics in one reply.
 
+### Query complexity
+
+Each query type has a different complexity level. This helps explain why some replies can be auto-sent while others need human review or escalation.
+
+| Query type | Complexity | Why |
+|---|---|---|
+| `post_sales_checkin` | Low | Mostly fixed facts like check-in time, WiFi, and door codes |
+| `pre_sales_availability` | Low to medium | Usually a direct availability lookup, but may need date coordination |
+| `pre_sales_pricing` | Medium | Requires pricing arithmetic and sometimes guest-count adjustments |
+| `general_enquiry` | Medium | Can span many policy questions and may need context from the property |
+| `special_request` | High | Needs details gathered and a human action to fulfill the request |
+| `complaint` | Very high | Requires empathy, judgement, and often manual intervention |
+
+This complexity also feeds the confidence logic: low-complexity factual questions can be scored more aggressively for auto-send, while high-complexity requests stay conservative and escalate sooner.
+
 ### Language detection and multilingual handling
 
 Before drafting the reply, the system can make an LLM-based language identification call to detect the dominant language in the guest message. This is useful when the message is written in a single language or in a mix of languages.
