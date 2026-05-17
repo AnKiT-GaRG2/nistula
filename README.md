@@ -207,20 +207,22 @@ The classifier applies priority-ordered regex rules. Each message is assigned on
 
 Multi-topic messages (e.g. "available April 20? Also, what's the WiFi?") are detected by the classifier and sent to the AI with a combined system prompt that addresses all matched topics in one reply.
 
-### Query complexity
+### Operational complexity
 
-Each query type has a different complexity level. This helps explain why some replies can be auto-sent while others need human review or escalation.
+Each query type has a different technical handling complexity. This is about how much workflow the platform must do after classification: alerting, escalation, task creation, human review, and follow-up automation.
 
-| Query type | Complexity | Why |
+| Query type | Handling complexity | Why |
 |---|---|---|
-| `post_sales_checkin` | Low | Mostly fixed facts like check-in time, WiFi, and door codes |
-| `pre_sales_availability` | Low to medium | Usually a direct availability lookup, but may need date coordination |
-| `pre_sales_pricing` | Medium | Requires pricing arithmetic and sometimes guest-count adjustments |
-| `general_enquiry` | Medium | Can span many policy questions and may need context from the property |
-| `special_request` | High | Needs details gathered and a human action to fulfill the request |
-| `complaint` | Very high | Requires empathy, judgement, and often manual intervention |
+| `post_sales_checkin` | Low | Usually a deterministic response with no alerting unless the guest reports a problem |
+| `pre_sales_availability` | Low | Mostly a lookup + reply flow; no escalation unless the data is missing or conflicting |
+| `pre_sales_pricing` | Low to medium | Needs pricing calculation and sometimes a confidence check, but still mostly auto-sendable |
+| `general_enquiry` | Medium | May need policy lookup, context from the property, and a review if the answer is not exact |
+| `special_request` | High | Must raise an operational task, notify staff, gather missing details, and track human follow-up |
+| `complaint` | Very high | Must trigger urgent alerts, simultaneous notifications, timers, escalation chains, and possible refund handling |
 
-This complexity also feeds the confidence logic: low-complexity factual questions can be scored more aggressively for auto-send, while high-complexity requests stay conservative and escalate sooner.
+So the complexity here is not just the reply text. It is the amount of backend work needed to safely handle the message. A factual check-in question is simple because it can be answered directly. A complaint is complex because the platform must open alerts, escalate to the right humans, track acknowledgement, and possibly create a maintenance or refund workflow.
+
+This is why the confidence and action-routing logic stays conservative for complaints and special requests, but allows low-risk factual queries to move quickly.
 
 ### Language detection and multilingual handling
 
