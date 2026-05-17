@@ -49,8 +49,26 @@ function isUrgentTone(tone) {
   return String(tone || '').startsWith('urgent');
 }
 
+function buildLanguageGuidance(languageProfile) {
+  const replyLanguage = String(languageProfile?.replyLanguage || languageProfile?.primaryLanguage || 'English');
+  const secondaryLanguages = Array.isArray(languageProfile?.secondaryLanguages)
+    ? languageProfile.secondaryLanguages.filter(Boolean)
+    : [];
+
+  if (replyLanguage.toLowerCase() === 'english' && secondaryLanguages.length === 0) {
+    return 'Reply in English.';
+  }
+
+  if (languageProfile?.isMixed) {
+    const otherLanguages = secondaryLanguages.length ? ` (${secondaryLanguages.join(', ')})` : '';
+    return `Reply in ${replyLanguage}${otherLanguages}. The guest used multiple languages, so keep the answer natural and code-mixed only where it feels natural. Prefer the dominant language for the main reply.`;
+  }
+
+  return `Reply in ${replyLanguage}.`;
+}
+
 // ── Feature 1: Persona ────────────────────────────────────────────────────────
-export function buildSystemPrompt(typePrompt) {
+export function buildSystemPrompt(typePrompt, languageProfile = null) {
   return `You are Priya, guest relations specialist at Nistula, a boutique villa company in Goa, India.
 
 You know Villa B1 in Assagao personally — you have walked its rooms, swum in its pool, and you genuinely love the place.
@@ -58,6 +76,9 @@ You speak the way a warm, knowledgeable friend would: direct, specific, never st
 You are not a chatbot or a front desk — you are a person who cares whether this guest has a great stay.
 
 Draft a reply that directly addresses what the guest actually asked. Do not pad it.
+
+LANGUAGE RULE:
+${buildLanguageGuidance(languageProfile)}
 
 OUTPUT FORMAT — strict JSON only, no markdown, no text outside the JSON:
 {"drafted_reply": "...", "confidence": 0.00}
@@ -72,7 +93,7 @@ ${propertyContext}`;
 
 // For messages that span multiple query types, combine the individual TYPE_PROMPTs
 // into a single instruction block so Claude answers every topic in one reply.
-export function buildCombinedSystemPrompt(typePrompts) {
+export function buildCombinedSystemPrompt(typePrompts, languageProfile = null) {
   const numbered = typePrompts
     .map((p, i) => `TOPIC ${i + 1}:\n${p}`)
     .join('\n\n');
@@ -83,7 +104,7 @@ ${numbered}
 
 Write a single, natural reply that covers all topics in flowing sentences. Do not use numbered lists or headings.`;
 
-  return buildSystemPrompt(combinedTypePrompt);
+  return buildSystemPrompt(combinedTypePrompt, languageProfile);
 }
 
 // ── Feature 3: Mirror guest energy ───────────────────────────────────────────
@@ -105,6 +126,7 @@ export function detectGuestTone(messageText) {
 export function buildUserContent(msg) {
   const tone = detectGuestTone(msg.message_text);
   const channelTone = CHANNEL_TONE[msg.source] ?? CHANNEL_TONE.direct;
+  const languageProfile = msg.languageProfile ?? {};
 
   // Urgent guests override the channel emoji rule — no emoji when someone is distressed
   const effectiveChannelTone = tone.startsWith('urgent')
@@ -120,6 +142,7 @@ export function buildUserContent(msg) {
     `Property: ${msg.property_id}`,
     `Sent at: ${msg.timestamp}`,
     `Guest tone: ${tone}`,
+    `Language profile: ${JSON.stringify(languageProfile)}`,
   ];
 
   // ── Feature 6: Conversation threading ────────────────────────────────────

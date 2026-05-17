@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { generateFallbackReply } from './fallbackReply.js';
 import { buildSystemPrompt, buildCombinedSystemPrompt, callClaude } from './clients/baseClient.js';
 import { callGroq } from './clients/groqClient.js';
+import { detectLanguageProfile } from './languageDetection.js';
 import { TYPE_PROMPT as availabilityPrompt }   from './clients/availabilityClient.js';
 import { TYPE_PROMPT as pricingPrompt }         from './clients/pricingClient.js';
 import { TYPE_PROMPT as checkinPrompt }         from './clients/checkinClient.js';
@@ -48,9 +49,9 @@ function resolveConfig(normalizedMessage) {
 function getSystemPromptForMessage(normalizedMessage) {
   if (normalizedMessage.query_types?.length > 1) {
     const prompts = normalizedMessage.query_types.map((t) => TYPE_PROMPT_MAP[t]).filter(Boolean);
-    return buildCombinedSystemPrompt(prompts);
+    return buildCombinedSystemPrompt(prompts, normalizedMessage.languageProfile);
   }
-  return buildSystemPrompt(TYPE_PROMPT_MAP[normalizedMessage.query_type] ?? generalEnquiryPrompt);
+  return buildSystemPrompt(TYPE_PROMPT_MAP[normalizedMessage.query_type] ?? generalEnquiryPrompt, normalizedMessage.languageProfile);
 }
 
 function isProviderAvailable(provider) {
@@ -76,6 +77,8 @@ function log(type, extra = {}) {
 
 // ── Main entry point ─────────────────────────────────────────────────────────
 export async function draftReply(normalizedMessage) {
+  normalizedMessage.languageProfile = await detectLanguageProfile(normalizedMessage.message_text);
+
   const { maxTokens } = resolveConfig(normalizedMessage);
   const systemPrompt = getSystemPromptForMessage(normalizedMessage);
 
@@ -85,6 +88,7 @@ export async function draftReply(normalizedMessage) {
     source:      normalizedMessage.source,
     booking_ref: normalizedMessage.booking_ref,
     max_tokens:  maxTokens,
+    language_profile: normalizedMessage.languageProfile,
   });
 
   for (const provider of PROVIDERS) {

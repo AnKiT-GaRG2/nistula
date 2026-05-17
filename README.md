@@ -206,6 +206,18 @@ The classifier applies priority-ordered regex rules. Each message is assigned on
 
 Multi-topic messages (e.g. "available April 20? Also, what's the WiFi?") are detected by the classifier and sent to the AI with a combined system prompt that addresses all matched topics in one reply.
 
+### Language detection and multilingual handling
+
+Before drafting the reply, the system can make an LLM-based language identification call to detect the dominant language in the guest message. This is useful when the message is written in a single language or in a mix of languages.
+
+The goal is to keep the reply in the guest’s language, or in the dominant language if the message is mixed. For example:
+
+- Guest message: "Kya villa available hai? Also what is the check-in time?"
+- Detected language: mixed Hindi + English, with English as the dominant drafting language
+- Reply behavior: answer both questions naturally, while preserving the language style the guest used
+
+If the message is fully in Hindi, the reply should be drafted in Hindi. If it is mostly English with a few local phrases, the reply should stay in English and mirror the guest’s wording where appropriate.
+
 ---
 
 ## Tone classification and emoji handling
