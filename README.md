@@ -65,7 +65,7 @@ src/
     messageStore.js               Conversation history fetch + message persistence
     db.js                         PostgreSQL connection pool (Neon)
     clients/
-      baseClient.js               Shared prompt builders, callClaude(), response parser
+      baseClient.js               Shared prompt builders, tone detection, channel-specific emoji rules, response parser
       groqClient.js               Groq API client (OpenAI-compatible)
       geminiClient.js             Gemini API client
       availabilityClient.js       Type prompt: pre_sales_availability
@@ -205,6 +205,46 @@ The classifier applies priority-ordered regex rules. Each message is assigned on
 | 6 | `pre_sales_availability` | Dates, availability, can we book | "Is the villa free April 20–24?" (default) |
 
 Multi-topic messages (e.g. "available April 20? Also, what's the WiFi?") are detected by the classifier and sent to the AI with a combined system prompt that addresses all matched topics in one reply.
+
+---
+
+## Tone classification and emoji handling
+
+The reply engine also classifies the guest’s tone so the response feels natural instead of generic. The tone detector looks for signals such as:
+
+- **urgent / distressed** — complaints, emergencies, or severe issues; the reply becomes calm and direct, with no cheerfulness
+- **excited** — positive, enthusiastic messages; the reply mirrors that energy
+- **polite / measured** — respectful requests; the reply stays warm but restrained
+- **neutral** — a balanced default tone
+
+Channel rules then control emoji usage:
+
+- **WhatsApp** — casual and warm; usually ends with one fitting emoji
+- **Airbnb** — conversational; may end with a single emoji
+- **Instagram** — relaxed and friendly; may use one or two emoji
+- **Booking.com** and **direct** — professional; no emoji
+
+Example:
+
+- Guest message: "We are so excited for our anniversary stay! Can’t wait to arrive."
+- Detected tone: **excited and enthusiastic**
+- Channel: **WhatsApp**
+- Reply style: warm, celebratory, and likely to end with a fitting emoji such as ✨ or 🌴
+
+If the same message were marked urgent, the reply would drop emoji completely and switch to calm, empathetic language.
+
+### How we avoid sounding like an AI agent
+
+The reply style is intentionally written to sound like a real guest-relations person, not a chatbot. We do that by:
+
+- giving the model a fixed human persona instead of a generic assistant voice
+- banning robotic phrases such as "please be assured" and "kindly note"
+- asking it to mention one concrete detail from the guest’s message so the reply feels specific
+- addressing the guest by first name only
+- forbidding references to AI, confidence scores, or internal systems
+- applying channel-aware tone rules so the message feels natural for WhatsApp, Airbnb, Instagram, Booking.com, or direct messages
+
+In practice, this means a reply should sound conversational, specific, and helpful — not overly formal, repetitive, or obviously machine-generated.
 
 ---
 
