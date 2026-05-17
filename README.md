@@ -24,6 +24,7 @@ POST /webhook/message
   getConversationHistory()  — last 2 messages from DB injected as context (feature: threading)
       │
   draftReply()              — multi-provider AI chain with per-type token budgets
+      detectLanguageProfile() — LLM-backed language detection for single-language and mixed-language messages
       │     ┌─────────────────────────────────────────────────────────┐
       │     │  Tier 1: Claude (Anthropic) — primary, highest quality  │
       │     │  Tier 2: Groq (Llama 70B)  — fast, cost-effective       │
@@ -257,6 +258,25 @@ The reply style is intentionally written to sound like a real guest-relations pe
 - applying channel-aware tone rules so the message feels natural for WhatsApp, Airbnb, Instagram, Booking.com, or direct messages
 
 In practice, this means a reply should sound conversational, specific, and helpful — not overly formal, repetitive, or obviously machine-generated.
+
+### Language detection for multilingual messages
+
+The system also detects the guest’s language before drafting a reply. This is done with an LLM-based language identification call, and it supports mixed-language messages as well.
+
+What it does:
+
+- identifies the primary language of the message
+- detects if the message is mixed-language
+- chooses the best reply language for drafting
+- keeps the response natural for code-mixed messages
+
+Example:
+
+- Guest message: "Kya villa available hai? Also what is the check-in time?"
+- Detected language: mixed Hindi + English
+- Reply behavior: answer naturally in the dominant language, while preserving the guest’s style
+
+If the message is fully in Hindi, the reply is drafted in Hindi. If it is mostly English with a few local words, the reply stays in English and mirrors the guest’s wording where it feels natural.
 
 ---
 
